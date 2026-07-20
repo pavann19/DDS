@@ -78,9 +78,26 @@ class InferencePipeline:
         # Build its input from the raw input_dict directly rather than reusing
         # clean_input, so a classifier feature-set change can never silently
         # break anomaly detection again.
+        # Task P1-3 finding: silently defaulting missing telemetry fields to
+        # 0.0 (below) let a reading missing 6 of 7 fields predict at 97.7%
+        # confidence with no anomaly flag at all -- a real risk if an
+        # upstream sensor/physics-engine field ever drops out. Detect
+        # genuine absence (key not present) BEFORE defaulting, and treat it
+        # as its own anomaly category, distinct from a present-but-extreme
+        # reading (which the range/Isolation-Forest checks in
+        # AnomalyDetector.detect() already handle).
+        anomaly_missing_keys = [f for f in self.anomaly_detector.features if f not in input_dict]
         anomaly_input = {f: float(input_dict.get(f, 0.0)) for f in self.anomaly_detector.features}
         anomaly_df = pd.DataFrame([anomaly_input])
-        anomaly_result = self.anomaly_detector.detect(anomaly_df, model_confidence=confidence)
+        if anomaly_missing_keys:
+            anomaly_result = {
+                "is_anomaly": True,
+                "type": "INCOMPLETE_INPUT",
+                "severity": "MEDIUM",
+                "message": f"Telemetry fields missing from input, defaulted to 0.0: {', '.join(anomaly_missing_keys)}"
+            }
+        else:
+            anomaly_result = self.anomaly_detector.detect(anomaly_df, model_confidence=confidence)
         
         return {
             "prediction": pred_label,

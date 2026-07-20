@@ -16,7 +16,16 @@ class PhysicsEngine:
         self.coolant_temp = 80.0
         self.fuel_rate = 0.0
         self.co2 = 0.0
-        self.altitude = 10.0
+        # Real training data's Altitude feature (processed_telemetry.csv) is
+        # scaled 128-203 (whatever units/baseline the source OBD-II dataset
+        # used), not "meters of elevation" -- this used to start at 10.0,
+        # which is wildly out-of-distribution for every tick of every
+        # simulated drive (found via task P1-3's robustness eval; the
+        # classifier silently tolerated it since Altitude has low feature
+        # importance, but it was never a physically-meaningful input).
+        # Start at the training mean so simulated telemetry is actually
+        # in-distribution.
+        self.altitude = 162.5
         
         self.last_rpm = 800.0
         self.last_co2 = 0.0
