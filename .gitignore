@@ -1,0 +1,28 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime / generated at runtime, not source
+dds_telemetry.db
+*.log
+
+# Env
+.env
+!.env.example
+
+# Evidence/context-pack working files are tracked (small, source-of-truth for the verification protocol)
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Node (frontend/.gitignore already covers node_modules/.next; this is a backstop
+# in case anything is ever run from the repo root)
+node_modules/

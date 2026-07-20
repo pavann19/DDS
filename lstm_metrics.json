@@ -1,0 +1,5 @@
+{
+  "test_accuracy": 0.7014925373134329,
+  "best_val_loss": 0.4376783072948456,
+  "window_size": 10
+}
