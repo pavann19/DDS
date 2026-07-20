@@ -121,9 +121,24 @@ def train_models(data_file="processed_telemetry.csv", model_dir=".",
         print(f"  Accuracy: {scores.mean():.4f} +/- {scores.std():.4f}")
         print(f"  Folds: {[f'{s:.4f}' for s in scores]}")
 
-    best_name = max(cv_results, key=lambda k: cv_results[k]["mean_accuracy"])
+    # Model selection is constrained to models compatible with shap.TreeExplainer
+    # for MULTICLASS output (app/services/explainability.py, used live in the
+    # 10Hz WebSocket loop -- too latency-sensitive for Kernel/Permutation SHAP
+    # fallbacks). Discovered via a real failure: GradientBoostingClassifier
+    # raises inside shap.TreeExplainer for 3+ classes ("only supported for
+    # binary classification"), and MLPClassifier isn't tree-based at all, so
+    # both are evaluated above for transparency but are not selectable as the
+    # deployed model, regardless of accuracy.
+    SHAP_COMPATIBLE = {"RandomForest", "XGBoost"}
+    eligible = {k: v for k, v in cv_results.items() if k in SHAP_COMPATIBLE}
+    best_name = max(eligible, key=lambda k: eligible[k]["mean_accuracy"])
     print(f"\n{'='*60}")
-    print(f"BEST MODEL (by train-split CV): {best_name} (CV Accuracy: {cv_results[best_name]['mean_accuracy']:.4f})")
+    print(f"BEST MODEL (by train-split CV, restricted to SHAP-multiclass-compatible models): "
+          f"{best_name} (CV Accuracy: {cv_results[best_name]['mean_accuracy']:.4f})")
+    for name in cv_results:
+        if name not in SHAP_COMPATIBLE:
+            print(f"  [excluded from selection] {name}: {cv_results[name]['mean_accuracy']:.4f} "
+                  f"(not shap.TreeExplainer multiclass-compatible)")
     print(f"{'='*60}")
 
     # --- FIT ON TRAIN, EVALUATE ON HELD-OUT TEST (the honest metric) ---
@@ -168,6 +183,15 @@ def train_models(data_file="processed_telemetry.csv", model_dir=".",
 
     metrics = {
         "best_model": best_name,
+        "model_selection_constraint": (
+            "Selection is restricted to models compatible with shap.TreeExplainer "
+            "for multiclass output (RandomForest, XGBoost), since SHAP is computed "
+            "live in the 10Hz WebSocket loop and slower model-agnostic explainers "
+            "aren't viable at that latency. GradientBoosting and MLP are evaluated "
+            "above for transparency but excluded from selection even when they "
+            "score higher on raw CV accuracy -- GradientBoostingClassifier "
+            "concretely fails inside shap.TreeExplainer for 3+ classes."
+        ),
         "methodology": (
             "Model selection via 5-fold stratified CV on an 80% train split. "
             "Reported test_* metrics are from ONE evaluation on a 20% held-out "

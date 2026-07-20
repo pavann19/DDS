@@ -59,18 +59,28 @@ class InferencePipeline:
             
         clean_input = {f: float(input_dict.get(f, 0.0)) for f in self.features}
         input_df = pd.DataFrame([clean_input])
-        
+
         scaled_input = self.scaler.transform(input_df)
-        
+
         pred_proba = self.model.predict_proba(scaled_input)[0]
         pred_idx = int(np.argmax(pred_proba))
         pred_label = self.label_encoder.inverse_transform([pred_idx])[0]
         confidence = float(np.max(pred_proba))
-        
+
         conf_dict = {str(self.label_encoder.inverse_transform([i])[0]): float(prob) for i, prob in enumerate(pred_proba)}
-        
+
         shap_result = self.explainer.explain_prediction(input_df, class_index=pred_idx)
-        anomaly_result = self.anomaly_detector.detect(input_df, model_confidence=confidence)
+
+        # The anomaly detector is an independently-trained model with its own
+        # feature set (anomaly_model.pkl's feature_names_in_), which is not
+        # guaranteed to match the classifier's feature subset (optimal_features.json)
+        # -- they can and do diverge whenever either model is retrained separately.
+        # Build its input from the raw input_dict directly rather than reusing
+        # clean_input, so a classifier feature-set change can never silently
+        # break anomaly detection again.
+        anomaly_input = {f: float(input_dict.get(f, 0.0)) for f in self.anomaly_detector.features}
+        anomaly_df = pd.DataFrame([anomaly_input])
+        anomaly_result = self.anomaly_detector.detect(anomaly_df, model_confidence=confidence)
         
         return {
             "prediction": pred_label,
