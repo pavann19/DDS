@@ -266,11 +266,23 @@ export default function TeslaDashboard() {
   const [logs, setLogs] = useState<string[]>([]);
   
   const [speed, setSpeed] = useState(0);
+  const [displayRpm, setDisplayRpm] = useState(0);
+  const [displayCoolant, setDisplayCoolant] = useState(60);
+  const [displayCo2, setDisplayCo2] = useState(0);
+  const [displayFuel, setDisplayFuel] = useState(0);
   const [connected, setConnected] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
   
   const speedRef = useRef(0);
   const targetSpeedRef = useRef(0);
+  const rpmRef = useRef(0);
+  const targetRpmRef = useRef(0);
+  const coolantRef = useRef(60);
+  const targetCoolantRef = useRef(60);
+  const co2Ref = useRef(0);
+  const targetCo2Ref = useRef(0);
+  const fuelRef = useRef(0);
+  const targetFuelRef = useRef(0);
   const animFrameRef = useRef<number>(0);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -278,6 +290,19 @@ export default function TeslaDashboard() {
     const animate = () => {
       speedRef.current += (targetSpeedRef.current - speedRef.current) * 0.08;
       setSpeed(Math.round(speedRef.current));
+
+      rpmRef.current += (targetRpmRef.current - rpmRef.current) * 0.08;
+      setDisplayRpm(rpmRef.current);
+
+      coolantRef.current += (targetCoolantRef.current - coolantRef.current) * 0.08;
+      setDisplayCoolant(coolantRef.current);
+
+      co2Ref.current += (targetCo2Ref.current - co2Ref.current) * 0.08;
+      setDisplayCo2(co2Ref.current);
+
+      fuelRef.current += (targetFuelRef.current - fuelRef.current) * 0.08;
+      setDisplayFuel(fuelRef.current);
+
       animFrameRef.current = requestAnimationFrame(animate);
     };
     animFrameRef.current = requestAnimationFrame(animate);
@@ -307,6 +332,11 @@ export default function TeslaDashboard() {
              targetSpeedRef.current = Math.round(t.RPM / 35);
           }
           
+          targetRpmRef.current = t.RPM;
+          targetCoolantRef.current = t.Coolant;
+          targetCo2Ref.current = t.CO2 || 0;
+          targetFuelRef.current = t['Litre per 100km(Instant)'];
+
           setTelemetry({
             rpm: t.RPM, coolant: t.Coolant, co2: t.CO2 || 0, fuel_rate: t['Litre per 100km(Instant)'],
             altitude: t.Altitude, rpm_delta: t.RPM_Delta, co2_delta: t.CO2_Delta, fuel_rate_delta: t.Fuel_Rate_Delta,
@@ -346,10 +376,10 @@ export default function TeslaDashboard() {
     }
   };
 
-  const rpm = telemetry?.rpm ?? 0;
-  const coolant = telemetry?.coolant ?? 60;
-  const co2 = telemetry?.co2 ?? 0;
-  const fuel = telemetry?.fuel_rate ?? 0;
+  const rpm = displayRpm;
+  const coolant = displayCoolant;
+  const co2 = displayCo2;
+  const fuel = displayFuel;
   const steering = navState?.steering ?? 0;
 
   return (

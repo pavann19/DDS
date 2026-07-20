@@ -9,6 +9,8 @@ htmlcov/
 
 # Runtime / generated at runtime, not source
 dds_telemetry.db
+dds_telemetry.db-shm
+dds_telemetry.db-wal
 *.log
 
 # Env
