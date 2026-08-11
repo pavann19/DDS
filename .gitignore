@@ -1,5 +1,9 @@
 # Python
 venv/
+# Isolated Python 3.12 environment for MetaDrive (P5-3a) -- MetaDrive requires
+# Python <3.13, incompatible with the main venv/'s 3.13. Entirely separate
+# from the app; large binary packages, never committed.
+venv_metadrive/
 __pycache__/
 *.pyc
 *.pyo

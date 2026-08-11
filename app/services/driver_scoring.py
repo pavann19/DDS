@@ -61,6 +61,19 @@ class DriverScorer:
         
         score = max(0.0, min(100.0, score))
         
+        # Energy Efficiency Score (Green Driving Index)
+        # Average litres per 100km. Lower is better.
+        # Let's say < 6L/100km is A+, > 15L/100km is F.
+        avg_fuel_rate = sum(item["telemetry"].get("Litre per 100km(Instant)", 0) for item in self.history) / len(self.history)
+        
+        green_score = 100.0 - min(100.0, max(0.0, (avg_fuel_rate - 4.0) * (100.0 / 11.0)))
+        if green_score >= 90: green_rating = "A+"
+        elif green_score >= 80: green_rating = "A"
+        elif green_score >= 70: green_rating = "B"
+        elif green_score >= 60: green_rating = "C"
+        elif green_score >= 50: green_rating = "D"
+        else: green_rating = "F"
+        
         if score >= 90: rating = "A+"
         elif score >= 80: rating = "A"
         elif score >= 70: rating = "B"
@@ -71,6 +84,8 @@ class DriverScorer:
         return {
             "score": round(score),
             "rating": rating,
+            "green_driving_index": round(green_score),
+            "green_driving_rating": green_rating,
             "breakdown": {
                 "smoothness": round(100 - (smoothness_penalty * 5)),
                 "efficiency": round(100 - (efficiency_penalty * 5)),

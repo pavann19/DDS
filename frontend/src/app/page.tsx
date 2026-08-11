@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Environment, Float, MeshReflectorMaterial, Sparkles } from '@react-three/drei';
@@ -9,16 +9,22 @@ import {
   Battery, ShieldCheck, Activity, Thermometer, Fuel, Wind, Gauge, Cpu, Zap, AlertCircle, CheckCircle2, X
 } from 'lucide-react';
 import { AreaChart, Area, Tooltip, ResponsiveContainer } from 'recharts';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, Variants } from 'framer-motion';
 
 import SHAPPanel from './components/SHAPPanel';
 import AnomalyAlert from './components/AnomalyAlert';
 import DriverScore from './components/DriverScore';
 import AutoparkOverlay from './components/AutoparkOverlay';
 import TeslaBottomDock from './components/TeslaBottomDock';
+import ConnectionStatus, { ConnectionState } from './components/ConnectionStatus';
+import TripSummary, { TripStats } from './components/TripSummary';
+import SettingsPanel, { UserPreferences, defaultPreferences } from './components/SettingsPanel';
+import LandingView from './components/LandingView';
 
 // Dynamically import map to avoid SSR issues
 const MapPanel = dynamic(() => import('./components/MapPanel'), { ssr: false });
+const DriveScene = dynamic(() => import('./components/DriveScene'), { ssr: false });
+import DriveHUD from './components/DriveHUD';
 
 // ─── TYPES ──────────────────────────────────────────────────
 interface TelemetryData {
@@ -40,6 +46,34 @@ interface NavState {
   heading: number;
   speed: number;
   steering: number;
+  route_index?: number;
+  has_route?: boolean;
+  station_m?: number;
+  driving_state?: string;
+  lateral_offset_m?: number;
+}
+
+interface NpcState {
+  id: string;
+  lane_offset: number;
+  speed_kmh: number;
+  station_m: number;
+}
+
+// Helper to calculate distance
+function getDistance(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371e3; // metres
+  const φ1 = lat1 * Math.PI/180;
+  const φ2 = lat2 * Math.PI/180;
+  const Δφ = (lat2-lat1) * Math.PI/180;
+  const Δλ = (lng2-lng1) * Math.PI/180;
+
+  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ/2) * Math.sin(Δλ/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+  return R * c;
 }
 
 interface ChartPoint {
@@ -225,8 +259,10 @@ function Scene({ action, speed, steering }: { action: string; speed: number; ste
 }
 
 // ─── SPEEDOMETER ARC ────────────────────────────────────────
-function SpeedGauge({ value, max = 160 }: { value: number; max?: number }) {
-  const pct = Math.min(value / max, 1);
+function SpeedGauge({ value, max = 160, units = 'metric' }: { value: number; max?: number, units?: 'metric' | 'imperial' }) {
+  const displayVal = units === 'imperial' ? Math.round(value * 0.621371) : value;
+  const displayMax = units === 'imperial' ? Math.round(max * 0.621371) : max;
+  const pct = Math.min(displayVal / displayMax, 1);
   const circumference = 2 * Math.PI * 90;
   const arcLength = circumference * 0.75;
   const offset = arcLength * (1 - pct);
@@ -245,21 +281,81 @@ function SpeedGauge({ value, max = 160 }: { value: number; max?: number }) {
         </defs>
       </svg>
       <div className="text-center z-10">
-        <div className="text-6xl font-light tabular-nums tracking-tighter text-white">{value}</div>
-        <div className="text-xs tracking-[0.3em] text-gray-500 font-semibold mt-1">KM/H</div>
+        <div className="text-6xl font-light tabular-nums tracking-tighter text-white">{displayVal}</div>
+        <div className="text-sm font-semibold tracking-widest text-gray-500 uppercase mt-1">{units === 'imperial' ? 'mph' : 'km/h'}</div>
       </div>
     </div>
   );
 }
 
 // ─── MAIN DASHBOARD ─────────────────────────────────────────
+const containerVariants: Variants = {
+  hidden: { opacity: 0, scale: 0.95, y: 20 },
+  visible: {
+    opacity: 1, 
+    scale: 1, 
+    y: 0,
+    transition: { type: "spring", bounce: 0, duration: 0.4, staggerChildren: 0.08, delayChildren: 0.1 }
+  },
+  exit: { 
+    opacity: 0, 
+    scale: 0.95, 
+    y: 20,
+    transition: { duration: 0.2 }
+  }
+};
+
+const itemVariants: Variants = {
+  hidden: { opacity: 0, y: 15 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.3 } },
+  exit: { opacity: 0, transition: { duration: 0.1 } }
+};
+
 export default function TeslaDashboard() {
   const [telemetry, setTelemetry] = useState<TelemetryData | null>(null);
   const [navState, setNavState] = useState<NavState | null>(null);
+  const [npcs, setNpcs] = useState<NpcState[]>([]);
   
   const [action, setAction] = useState("Maintain Speed");
   const [confidence, setConfidence] = useState<Record<string, number>>({});
   const [shapData, setShapData] = useState<any>(null);
+
+  const [showSettings, setShowSettings] = useState(false);
+  const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('tesla_dashboard_prefs');
+    if (saved) {
+      try {
+        setPreferences({ ...defaultPreferences, ...JSON.parse(saved) });
+      } catch (e) {}
+    }
+  }, []);
+
+  const handleUpdatePreferences = (updates: Partial<UserPreferences>) => {
+    const newPrefs = { ...preferences, ...updates };
+    setPreferences(newPrefs);
+    localStorage.setItem('tesla_dashboard_prefs', JSON.stringify(newPrefs));
+  };
+
+  const [tripStats, setTripStats] = useState<TripStats>({
+    elapsedTime: 0,
+    avgFuelRate: 0,
+    totalCo2: 0,
+    totalDistance: 0,
+    decisionBreakdown: { accelerate: 0, decelerate: 0, maintain: 0 },
+    totalPredictions: 0,
+  });
+
+  const tripRef = useRef({
+    startTime: 0,
+    lastTick: 0,
+    totalFuel: 0,
+    totalCo2: 0,
+    totalDistance: 0,
+    decisions: { accelerate: 0, decelerate: 0, maintain: 0 },
+    count: 0
+  });
   const [anomalyData, setAnomalyData] = useState<any>(null);
   const [scoreData, setScoreData] = useState<any>(null);
   const [chartData, setChartData] = useState<ChartPoint[]>([]);
@@ -270,8 +366,13 @@ export default function TeslaDashboard() {
   const [displayCoolant, setDisplayCoolant] = useState(60);
   const [displayCo2, setDisplayCo2] = useState(0);
   const [displayFuel, setDisplayFuel] = useState(0);
-  const [connected, setConnected] = useState(false);
+  const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
   const [showAnalytics, setShowAnalytics] = useState(false);
+  
+  const [hasInitialData, setHasInitialData] = useState(false);
+  const hasInitialDataRef = useRef(false);
+  const [route, setRoute] = useState<[number, number][]>([]);
+  const [routeSteps, setRouteSteps] = useState<any[]>([]);
   
   const speedRef = useRef(0);
   const targetSpeedRef = useRef(0);
@@ -317,13 +418,50 @@ export default function TeslaDashboard() {
         const wsUrl = process.env.NEXT_PUBLIC_WS_URL || `${protocol}//${hostname}:8000/ws/telemetry`;
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
-        ws.onopen = () => setConnected(true);
+        ws.onopen = () => setConnectionState('connected');
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
           if (data.error) return;
+
+          if (data.type === 'route') {
+            setRoute(data.waypoints);
+            if (data.steps) setRouteSteps(data.steps);
+            return;
+          }
           
           const t = data.telemetry;
           const nav = data.navigation;
+          
+          const now = Date.now();
+          if (tripRef.current.startTime === 0) {
+            tripRef.current.startTime = now;
+            tripRef.current.lastTick = now;
+          }
+          const dt = (now - tripRef.current.lastTick) / 1000;
+          tripRef.current.lastTick = now;
+
+          const speedKmh = nav ? nav.speed : 0;
+          const distKm = (speedKmh / 3600) * dt;
+          const co2Rate = t.CO2 || 0;
+          
+          tripRef.current.totalFuel += t.fuel_rate || 0;
+          tripRef.current.totalCo2 += co2Rate * dt;
+          tripRef.current.totalDistance += distKm;
+          tripRef.current.count += 1;
+          
+          const decision = data.predicted_decision;
+          if (decision === 'Accelerate') tripRef.current.decisions.accelerate++;
+          else if (decision === 'Decelerate') tripRef.current.decisions.decelerate++;
+          else tripRef.current.decisions.maintain++;
+
+          setTripStats({
+            elapsedTime: Math.floor((now - tripRef.current.startTime) / 1000),
+            avgFuelRate: tripRef.current.totalFuel / tripRef.current.count,
+            totalCo2: tripRef.current.totalCo2,
+            totalDistance: tripRef.current.totalDistance,
+            decisionBreakdown: { ...tripRef.current.decisions },
+            totalPredictions: tripRef.current.count
+          });
           
           if (nav) {
              setNavState(nav);
@@ -331,6 +469,7 @@ export default function TeslaDashboard() {
           } else {
              targetSpeedRef.current = Math.round(t.RPM / 35);
           }
+          if (data.npcs) setNpcs(data.npcs);
           
           targetRpmRef.current = t.RPM;
           targetCoolantRef.current = t.Coolant;
@@ -355,11 +494,16 @@ export default function TeslaDashboard() {
           
           setChartData(prev => [...prev.slice(-25), { t: prev.length, rpm: t.RPM, co2: t.CO2 || 0 }]);
           
+          if (!hasInitialDataRef.current) {
+            hasInitialDataRef.current = true;
+            setHasInitialData(true);
+          }
+          
           const confPct = data.confidence ? Math.round(Math.max(...Object.values(data.confidence as Record<string, number>)) * 100) : 0;
           setLogs(prev => [...prev.slice(-4), `Prediction: ${data.predicted_decision} (${confPct}%)`]);
         };
         ws.onclose = () => {
-          setConnected(false);
+          setConnectionState('reconnecting');
           setTimeout(connect, 3000);
         };
       } catch (e) {
@@ -382,195 +526,121 @@ export default function TeslaDashboard() {
   const fuel = displayFuel;
   const steering = navState?.steering ?? 0;
 
+  const currentTime = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
+  
+  const totalRouteDist = useMemo(() => {
+    let dist = 0;
+    for (let i = 0; i < route.length - 1; i++) {
+       dist += getDistance(route[i][0], route[i][1], route[i+1][0], route[i+1][1]);
+    }
+    return dist;
+  }, [route]);
+  
+  const distRemaining = Math.max(0, totalRouteDist - (navState?.station_m ?? 0));
+  const distRemainingMi = distRemaining / 1609.34;
+  const speedMph = (navState?.speed ?? 0) * 0.621371;
+  const etaMin = speedMph > 5 ? (distRemainingMi / speedMph) * 60 : (distRemainingMi / 30) * 60; // fallback to 30mph if stopped
+
+  const etaTime = new Date(Date.now() + Math.round(etaMin) * 60000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
+
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden select-none bg-black text-white">
-      <AnomalyAlert anomaly={anomalyData} />
-
-      <div className="flex-1 flex pb-20 relative">
-        
-        {/* ═══ LEFT PANEL: INSTRUMENT CLUSTER (30% WIDTH) ═══ */}
-        <div className="w-[30%] min-w-[350px] h-full flex flex-col relative bg-[#030308] shadow-2xl z-20">
+    <AnimatePresence>
+      {!hasInitialData ? (
+        <LandingView key="landing" connectionState={connectionState} />
+      ) : (
+        <motion.div 
+          key="dashboard"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 1 }}
+          className="h-screen w-screen flex flex-col overflow-hidden select-none bg-[#c6b5c7] text-black relative"
+        >
+          {/* FULL SCREEN 3D DRIVING VISUALIZATION */}
+          <div className="absolute inset-0 z-0">
+            <DriveScene route={route} navState={navState} action={action} confidence={confidence[action] ?? 1} npcs={npcs} />
+          </div>
           
-          <div className="flex justify-between items-center px-6 py-5">
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="w-5 h-5 text-blue-500" />
-              <span className="text-xs font-semibold tracking-[0.2em] text-gray-400">AUTOPILOT</span>
-              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
+          {/* FULL SCREEN HUD */}
+          <div className="absolute inset-0 z-10 pointer-events-none">
+            <DriveHUD navState={navState} route={route} steps={routeSteps} confidenceOverride={confidence[action] < 0.55} />
+          </div>
+
+          {/* Autopark Overlay (Keep if needed, though FSD UI hides this usually) */}
+          <div className="z-20 pointer-events-none">
+            <AutoparkOverlay speed={speed} />
+          </div>
+
+          {/* TESLA FSD BOTTOM UI OVERLAYS */}
+          <div className="absolute bottom-24 left-8 flex gap-4 z-20 pointer-events-auto">
+            {/* Media Player Mock */}
+            <div className="w-[380px] h-[120px] bg-[#dfdbdf]/90 backdrop-blur-xl rounded-2xl shadow-xl border border-black/5 flex flex-col p-4 overflow-hidden">
+               <div className="flex items-center gap-4 mb-4">
+                 <div className="w-12 h-12 bg-gray-800 rounded-md"></div>
+                 <div className="flex flex-col">
+                   <span className="text-xs text-gray-500 font-semibold uppercase tracking-wider text-left">Bluetooth</span>
+                   <span className="text-sm font-semibold text-gray-800 text-left">iPhone Pro</span>
+                 </div>
+               </div>
+               <div className="flex justify-between items-center px-4 text-gray-700">
+                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>
+                 <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
+                 <span className="text-lg mx-2 text-gray-400">|||</span>
+                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+               </div>
             </div>
-            <div className="flex items-center gap-3 text-gray-500 text-sm">
-              <Battery className="w-4 h-4 text-green-500" /><span>87%</span>
+
+            {/* Trip Info Mock connected to live data */}
+            <div className="w-[280px] h-[120px] bg-[#dfdbdf]/90 backdrop-blur-xl rounded-2xl shadow-xl border border-black/5 p-4 flex flex-col justify-between">
+              <div className="flex justify-between items-start">
+                <div className="flex flex-col text-left">
+                  <span className="text-lg font-bold text-gray-800">{navState?.has_route ? etaTime : currentTime}</span>
+                  <span className="text-xs text-gray-600 font-medium truncate max-w-[120px]">
+                    {navState?.has_route ? (routeSteps.length > 0 ? routeSteps[routeSteps.length - 1].instruction : "Destination") : "No Active Route"}
+                  </span>
+                </div>
+                <div className="flex flex-col text-right">
+                  <span className="text-sm font-bold text-gray-800">
+                    {navState?.has_route ? `${Math.round(etaMin)} min ` : "-- min "}
+                    <span className="text-gray-500 font-normal">
+                      {navState?.has_route ? `${distRemainingMi.toFixed(1)} mi` : "-- mi"}
+                    </span>
+                  </span>
+                  <span className="text-xs font-semibold text-gray-800 mt-1 flex items-center justify-end gap-1">
+                    <Battery className="w-3 h-3 text-green-600"/> 
+                    {scoreData?.green_driving_rating ? `Eco ${scoreData.green_driving_rating}` : '65%'}
+                  </span>
+                </div>
+              </div>
+              <div className="w-full h-[1px] bg-black/10 my-1"></div>
+              <div className="flex justify-between items-center text-gray-600">
+                <span className="text-sm font-medium hover:text-black cursor-pointer" onClick={() => handleSetDestination(0, 0)}>End Trip</span>
+                <span className="text-lg tracking-[0.2em] hover:text-black cursor-pointer">...</span>
+              </div>
             </div>
           </div>
 
-          <div className="flex justify-center mt-0">
-            <SpeedGauge value={speed} />
-          </div>
-
-          <div className="flex justify-center gap-8 text-sm tracking-[0.3em] text-gray-600 font-medium z-10 -mt-4">
-            {['P', 'R', 'N', 'D'].map(g => (
-              <span key={g} className={g === 'D' ? 'text-white font-bold' : ''}>{g}</span>
-            ))}
-          </div>
-
-          <div className="flex-1 relative mt-2 pointer-events-none">
-            <Canvas camera={{ position: [0, 3, 6], fov: 40 }} className="!absolute inset-0">
-              <Suspense fallback={null}>
-                <Scene action={action} speed={speed} steering={steering} />
-              </Suspense>
-            </Canvas>
-          </div>
-
-          <div className="px-6 pb-6">
-            <motion.div
-              className={`p-4 rounded-2xl border backdrop-blur-xl transition-colors duration-500 ${
-                action === 'Accelerate' ? 'bg-green-500/10 border-green-500/30 text-green-400' :
-                action === 'Decelerate' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
-                'bg-blue-500/10 border-blue-500/30 text-blue-400'
-              }`}
-              layout
-            >
-              <div className="flex justify-between items-center mb-1">
-                <div className="text-[10px] uppercase tracking-[0.2em] opacity-70">AI Prediction</div>
-                <div className="text-xs">{(confidence[action] * 100 || 0).toFixed(0)}% CONFIDENCE</div>
-              </div>
-              <div className="flex items-center text-lg font-medium mb-3">
-                {action === 'Accelerate' && <Zap className="w-5 h-5 mr-2" />}
-                {action === 'Decelerate' && <AlertCircle className="w-5 h-5 mr-2" />}
-                {action === 'Maintain Speed' && <CheckCircle2 className="w-5 h-5 mr-2" />}
-                {action}
-              </div>
-              <div className="space-y-1.5">
-                {Object.entries(confidence).map(([cls, conf]) => (
-                  <div key={cls} className="flex items-center gap-2 text-[10px]">
-                    <span className="w-20 text-gray-500 truncate">{cls}</span>
-                    <div className="flex-1 h-1.5 bg-black/40 rounded-full overflow-hidden">
-                      <motion.div
-                        className={`h-full rounded-full ${cls === 'Accelerate' ? 'bg-green-500' : cls === 'Decelerate' ? 'bg-red-500' : 'bg-blue-500'}`}
-                        animate={{ width: `${conf * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </motion.div>
-          </div>
-        </div>
-
-        {/* ═══ RIGHT PANEL: MAP & OVERLAYS (70% WIDTH) ═══ */}
-        <div className="flex-1 relative overflow-hidden bg-[#111]">
-          {/* Map Background */}
-          <MapPanel navState={navState} onSetDestination={handleSetDestination} />
-          
-          {/* Autopark Overlay */}
-          <AutoparkOverlay speed={speed} />
-
-          {/* Intelligence Hub (Analytics) Modal */}
           <AnimatePresence>
-            {showAnalytics && (
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                transition={{ type: "spring", bounce: 0, duration: 0.4 }}
-                className="absolute inset-x-8 bottom-8 top-24 bg-[#080812]/95 backdrop-blur-2xl border border-white/10 rounded-3xl p-6 shadow-2xl flex flex-col gap-4 z-40"
-              >
-                <div className="flex justify-between items-center px-2">
-                   <h2 className="text-xl font-medium tracking-wide text-gray-200">Intelligence Hub</h2>
-                   <button onClick={() => setShowAnalytics(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-                     <X className="w-5 h-5 text-gray-400" />
-                   </button>
-                </div>
-
-                {/* Top Row: Driver Score & Telemetry */}
-                <div className="grid grid-cols-5 gap-4 h-[240px]">
-                   <div className="col-span-2">
-                      <DriverScore scoreData={scoreData} />
-                   </div>
-                   
-                   <div className="col-span-3 bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col">
-                      <div className="flex items-center gap-2 text-gray-400 mb-3">
-                        <Gauge className="w-4 h-4 text-purple-400" />
-                        <h3 className="text-sm font-semibold tracking-wide uppercase">Engine State</h3>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3 flex-1">
-                         {[
-                          { label: 'Engine RPM', value: rpm, max: 5000, color: '#c084fc', icon: Activity },
-                          { label: 'Coolant Temp', value: coolant, max: 120, unit: '°C', color: '#f97316', icon: Thermometer },
-                          { label: 'CO₂ Output', value: co2, max: 1000, unit: 'g/km', color: '#22d3ee', icon: Wind },
-                          { label: 'Fuel Flow', value: fuel, max: 50, unit: 'L/100km', color: '#a3e635', icon: Fuel },
-                         ].map(({ label, value, max, unit, color, icon: Icon }) => (
-                            <div key={label} className="bg-black/30 rounded-xl p-3 flex flex-col justify-between">
-                               <div className="flex items-center justify-between text-gray-500 text-[10px] uppercase tracking-wider">
-                                 <span>{label}</span>
-                                 <Icon className="w-3 h-3" style={{ color }} />
-                               </div>
-                               <div className="text-xl font-light tabular-nums my-1" style={{ color }}>
-                                 {Math.round(value)}<span className="text-[10px] text-gray-600 ml-1">{unit}</span>
-                               </div>
-                               <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
-                                 <motion.div className="h-full rounded-full" style={{ backgroundColor: color }} animate={{ width: `${Math.min((value / max) * 100, 100)}%` }} />
-                               </div>
-                            </div>
-                         ))}
-                      </div>
-                   </div>
-                </div>
-
-                {/* Bottom Row: SHAP & History */}
-                <div className="grid grid-cols-5 gap-4 flex-1 min-h-0">
-                   <div className="col-span-2">
-                      <SHAPPanel shapData={shapData} />
-                   </div>
-                   
-                   <div className="col-span-3 flex flex-col gap-4 min-h-0">
-                      <div className="flex-1 bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col min-h-0">
-                         <div className="flex items-center justify-between mb-2">
-                           <h3 className="text-sm font-semibold tracking-wide uppercase text-gray-400">Signal Trend</h3>
-                           <div className="flex gap-3 text-[10px]">
-                             <span className="text-purple-400">● RPM</span>
-                             <span className="text-cyan-400">● CO₂</span>
-                           </div>
-                         </div>
-                         <div className="flex-1 min-h-0">
-                           <ResponsiveContainer width="100%" height="100%">
-                             <AreaChart data={chartData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                               <defs>
-                               <linearGradient id="gRpm" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#c084fc" stopOpacity={0.3} /><stop offset="95%" stopColor="#c084fc" stopOpacity={0} /></linearGradient>
-                                 <linearGradient id="gCo2" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22d3ee" stopOpacity={0.3} /><stop offset="95%" stopColor="#22d3ee" stopOpacity={0} /></linearGradient>
-                               </defs>
-                               <Area type="monotone" dataKey="rpm" stroke="#c084fc" strokeWidth={2} fill="url(#gRpm)" isAnimationActive={false} />
-                               <Area type="monotone" dataKey="co2" stroke="#22d3ee" strokeWidth={2} fill="url(#gCo2)" isAnimationActive={false} />
-                             </AreaChart>
-                           </ResponsiveContainer>
-                         </div>
-                      </div>
-                      
-                      <div className="h-[100px] bg-white/5 border border-white/10 rounded-2xl p-3 flex flex-col">
-                         <div className="flex items-center gap-2 text-gray-400 mb-2">
-                            <Cpu className="w-3.5 h-3.5" />
-                            <span className="text-[10px] font-semibold tracking-wide uppercase">AI Event Stream</span>
-                         </div>
-                         <div className="flex-1 overflow-hidden flex flex-col justify-end">
-                            <AnimatePresence>
-                              {logs.map((log, i) => (
-                                <motion.div key={log + i} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="text-[10px] text-gray-400 font-mono flex items-center py-0.5">
-                                   <span className="text-blue-400 mr-2">›</span>{log}
-                                </motion.div>
-                              ))}
-                            </AnimatePresence>
-                         </div>
-                      </div>
-                   </div>
-                </div>
-              </motion.div>
+            {showSettings && (
+              <SettingsPanel 
+                preferences={preferences} 
+                onUpdate={handleUpdatePreferences} 
+                onClose={() => setShowSettings(false)} 
+              />
             )}
           </AnimatePresence>
 
-        </div>
-      </div>
-
-      {/* ═══ BOTTOM DOCK ═══ */}
-      <TeslaBottomDock showAnalytics={showAnalytics} onToggleAnalytics={() => setShowAnalytics(!showAnalytics)} />
-    </div>
+          {/* ═══ BOTTOM DOCK ═══ */}
+          <div className="absolute bottom-0 inset-x-0 z-30">
+            <TeslaBottomDock 
+              showAnalytics={showAnalytics} 
+              onToggleAnalytics={() => setShowAnalytics(!showAnalytics)} 
+              showSettings={showSettings}
+              onToggleSettings={() => setShowSettings(!showSettings)}
+            />
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

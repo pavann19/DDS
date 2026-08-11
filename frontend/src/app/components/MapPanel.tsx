@@ -16,9 +16,11 @@ L.Icon.Default.mergeOptions({
 // Custom Car Marker Icon (SVG)
 const carIcon = new L.DivIcon({
   className: "bg-transparent border-none",
-  html: `<div class="relative flex items-center justify-center w-12 h-12">
+  html: `<div class="car-icon-inner relative flex items-center justify-center w-12 h-12 transition-transform duration-75">
            <div class="absolute w-8 h-8 bg-blue-500 rounded-full opacity-30 animate-ping"></div>
-           <div class="relative w-4 h-4 bg-blue-500 rounded-full border-2 border-white shadow-[0_0_15px_rgba(59,130,246,0.8)]"></div>
+           <div class="relative w-4 h-4 bg-blue-500 rounded-full border-2 border-white shadow-[0_0_15px_rgba(59,130,246,0.8)] flex items-center justify-center">
+             <div class="absolute w-0 h-0 border-l-[3px] border-r-[3px] border-b-[6px] border-l-transparent border-r-transparent border-b-white -top-1.5"></div>
+           </div>
          </div>`,
   iconSize: [48, 48],
   iconAnchor: [24, 24],
@@ -40,25 +42,63 @@ interface NavState {
   heading: number;
   speed: number;
   steering: number;
+  route_index?: number;
+  has_route?: boolean;
 }
 
 // Moves the map and marker based on true physics backend coordinates
 function MapDriver({ nav }: { nav: NavState | null }) {
   const map = useMap();
   const markerRef = useRef<L.Marker>(null);
+  const currentPos = useRef<{ lat: number, lng: number, heading: number } | null>(null);
+  const targetPos = useRef<{ lat: number, lng: number, heading: number } | null>(null);
+  const animFrame = useRef<number>(0);
 
   useEffect(() => {
     if (nav) {
-      // Smoothly pan map to current location
-      map.setView([nav.lat, nav.lng], map.getZoom(), { animate: true, duration: 0.5 });
-      
-      if (markerRef.current) {
-        markerRef.current.setLatLng([nav.lat, nav.lng]);
-        // Leaflet doesn't natively support marker rotation in the standard Marker,
-        // but we can hack the DOM element if needed. For now, panning is the main focus.
+      targetPos.current = { lat: nav.lat, lng: nav.lng, heading: nav.heading };
+      if (!currentPos.current) {
+        currentPos.current = { lat: nav.lat, lng: nav.lng, heading: nav.heading };
+        map.setView([nav.lat, nav.lng], map.getZoom(), { animate: false });
       }
     }
   }, [nav, map]);
+
+  useEffect(() => {
+    const lerp = (start: number, end: number, amt: number) => (1 - amt) * start + amt * end;
+    
+    const lerpAngle = (start: number, end: number, amt: number) => {
+      let diff = end - start;
+      while (diff < -180) diff += 360;
+      while (diff > 180) diff -= 360;
+      return start + diff * amt;
+    };
+
+    const animate = () => {
+      if (currentPos.current && targetPos.current) {
+        currentPos.current.lat = lerp(currentPos.current.lat, targetPos.current.lat, 0.1);
+        currentPos.current.lng = lerp(currentPos.current.lng, targetPos.current.lng, 0.1);
+        currentPos.current.heading = lerpAngle(currentPos.current.heading, targetPos.current.heading, 0.1);
+
+        if (markerRef.current) {
+          markerRef.current.setLatLng([currentPos.current.lat, currentPos.current.lng]);
+          const el = markerRef.current.getElement();
+          if (el) {
+            const inner = el.querySelector('.car-icon-inner') as HTMLElement;
+            if (inner) {
+              inner.style.transform = `rotate(${currentPos.current.heading}deg)`;
+            }
+          }
+        }
+        
+        map.setView([currentPos.current.lat, currentPos.current.lng], map.getZoom(), { animate: false });
+      }
+      animFrame.current = requestAnimationFrame(animate);
+    };
+
+    animFrame.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animFrame.current);
+  }, [map]);
 
   if (!nav) return null;
 
@@ -85,9 +125,10 @@ function ClickHandler({ onSetDestination }: { onSetDestination: (lat: number, ln
 interface MapPanelProps {
   navState: NavState | null;
   onSetDestination: (lat: number, lng: number) => void;
+  route: [number, number][];
 }
 
-export default function MapPanel({ navState, onSetDestination }: MapPanelProps) {
+export default function MapPanel({ navState, onSetDestination, route }: MapPanelProps) {
   const darkMatterUrl = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
   const attribution = '&copy; <a href="https://carto.com/attributions">CARTO</a>';
 
@@ -112,16 +153,33 @@ export default function MapPanel({ navState, onSetDestination }: MapPanelProps) 
         {navState && (
           <>
             <Marker position={[navState.target_lat, navState.target_lng]} icon={destIcon} />
-            <Polyline 
-              positions={[
-                [navState.lat, navState.lng],
-                [navState.target_lat, navState.target_lng]
-              ]} 
-              color="#3b82f6" 
-              weight={3} 
-              dashArray="10, 10" 
-              opacity={0.5} 
-            />
+            {navState.has_route && route.length > 0 ? (
+              <>
+                <Polyline 
+                  positions={route.slice(0, (navState.route_index ?? 0) + 1)}
+                  color="#6b7280" 
+                  weight={4}
+                  opacity={0.6}
+                />
+                <Polyline 
+                  positions={route.slice(navState.route_index ?? 0)}
+                  color="#3b82f6" 
+                  weight={4}
+                  opacity={0.9}
+                />
+              </>
+            ) : (
+              <Polyline 
+                positions={[
+                  [navState.lat, navState.lng],
+                  [navState.target_lat, navState.target_lng]
+                ]} 
+                color="#3b82f6" 
+                weight={3} 
+                dashArray="10, 10" 
+                opacity={0.5} 
+              />
+            )}
           </>
         )}
       </MapContainer>

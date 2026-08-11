@@ -6,9 +6,11 @@ import { Grid, Fan, Music, Phone, Settings, Volume2, Car, Map, BarChart2 } from 
 interface TeslaBottomDockProps {
   onToggleAnalytics: () => void;
   showAnalytics: boolean;
+  onToggleSettings: () => void;
+  showSettings: boolean;
 }
 
-export default function TeslaBottomDock({ onToggleAnalytics, showAnalytics }: TeslaBottomDockProps) {
+export default function TeslaBottomDock({ onToggleAnalytics, showAnalytics, onToggleSettings, showSettings }: TeslaBottomDockProps) {
   return (
     <div className="absolute bottom-0 left-0 w-full h-20 bg-[#0a0a0a]/90 backdrop-blur-2xl border-t border-white/5 flex items-center justify-between px-8 z-50">
       
@@ -58,8 +60,11 @@ export default function TeslaBottomDock({ onToggleAnalytics, showAnalytics }: Te
         <button className="p-2 hover:bg-white/10 rounded-xl transition-colors">
           <Volume2 className="w-5 h-5 text-gray-300" />
         </button>
-        <button className="p-2 hover:bg-white/10 rounded-xl transition-colors opacity-70">
-          <Settings className="w-5 h-5 text-gray-300" />
+        <button 
+          onClick={onToggleSettings}
+          className={`p-2 rounded-xl transition-all duration-300 ${showSettings ? 'bg-blue-500/20 text-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'hover:bg-white/10 text-gray-300 opacity-70'}`}
+        >
+          <Settings className="w-5 h-5" />
         </button>
       </div>
 

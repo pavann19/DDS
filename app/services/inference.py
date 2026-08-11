@@ -66,6 +66,22 @@ class InferencePipeline:
         pred_idx = int(np.argmax(pred_proba))
         pred_label = self.label_encoder.inverse_transform([pred_idx])[0]
         confidence = float(np.max(pred_proba))
+        
+        confidence_override = False
+        if confidence < 0.55:
+            # Safety override: below this confidence, don't trust the raw
+            # prediction, default to the safest action instead. This must
+            # also repoint pred_idx at Decelerate's class index -- not just
+            # relabel pred_label -- otherwise the SHAP explanation below
+            # would still explain the ORIGINAL (discarded) prediction while
+            # the car visibly does something else, a real inconsistency
+            # between what the AI Prediction panel says it's doing and what
+            # the SHAP panel says caused it.
+            classes = list(self.label_encoder.classes_)
+            if "Decelerate" in classes:
+                pred_idx = classes.index("Decelerate")
+            pred_label = "Decelerate"
+            confidence_override = True
 
         conf_dict = {str(self.label_encoder.inverse_transform([i])[0]): float(prob) for i, prob in enumerate(pred_proba)}
 
@@ -103,6 +119,7 @@ class InferencePipeline:
             "prediction": pred_label,
             "confidence": confidence,
             "confidence_dict": conf_dict,
+            "confidence_override": confidence_override,
             "shap_result": shap_result,
             "anomaly_result": anomaly_result,
             "clean_input": clean_input

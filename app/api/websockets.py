@@ -11,6 +11,7 @@ from app.core.database import AsyncSessionLocal, SessionRecord, TelemetryLog, Dr
 from app.services.inference import pipeline
 from app.services.physics_engine import PhysicsEngine
 from app.services.driver_scoring import DriverScorer
+from app.services.routing import get_route
 from sqlalchemy.future import select
 from datetime import datetime
 
@@ -87,6 +88,42 @@ async def websocket_endpoint(websocket: WebSocket):
 
     await create_stream_session(session_id)
 
+    # P3-1: fetch a real road-following route in the background (the
+    # routing call can take 1-2s -- the car keeps driving on the
+    # straight-line fallback in the meantime, then snaps onto the real
+    # route once this resolves). Pushed to the client as a one-time
+    # "route" message rather than resent every tick; the frontend renders
+    # the full path and slices it locally using navigation.route_index.
+    async def fetch_and_apply_route(origin_lat, origin_lng, dest_lat, dest_lng):
+        route_data = await get_route(origin_lat, origin_lng, dest_lat, dest_lng)
+        if not route_data:
+            return  # routing service unavailable -- straight-line fallback already active
+        waypoints, steps = route_data
+        
+        if (physics.target_lat, physics.target_lng) != (dest_lat, dest_lng):
+            # A newer set_destination happened while this fetch was in
+            # flight -- discard this now-stale route rather than
+            # overwriting the route for the current destination.
+            return
+        physics.set_route(waypoints)
+        if disconnected:
+            return
+        try:
+            await websocket.send_json({
+                "type": "route",
+                # P6-1d: send physics.route (the spline-smoothed, uniformly
+                # resampled path) rather than the raw OSRM waypoints, so the
+                # rendered road is exactly the path the car is actually
+                # driving. Sending the raw polyline here would reintroduce the
+                # backend/frontend world-disagreement that P6-1b had to fix.
+                "waypoints": [[lat, lng] for lat, lng in physics.route],
+                "steps": steps
+            })
+        except Exception as e:
+            logger.warning(f"Failed to send route to client (likely disconnected): {e}")
+
+    asyncio.create_task(fetch_and_apply_route(physics.lat, physics.lng, physics.target_lat, physics.target_lng))
+
     # Background task to listen for commands
     async def listen_for_commands():
         nonlocal disconnected
@@ -99,6 +136,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         cmd = SetDestinationCommand(**payload)
                         physics.set_destination(cmd.lat, cmd.lng)
                         logger.info(f"New destination set: {cmd.lat}, {cmd.lng}")
+                        asyncio.create_task(fetch_and_apply_route(physics.lat, physics.lng, cmd.lat, cmd.lng))
                 except json.JSONDecodeError:
                     logger.warning("Invalid JSON received on websocket")
                 except ValidationError as e:
@@ -149,9 +187,19 @@ async def websocket_endpoint(websocket: WebSocket):
                 "navigation": nav_state,
                 "predicted_decision": current_action,
                 "confidence": result["confidence_dict"],
+                "confidence_override": result["confidence_override"],
                 "shap": result["shap_result"],
                 "anomaly": result["anomaly_result"],
-                "driver_score": score_data
+                "driver_score": score_data,
+                # P6-1b: server-side NPC traffic state, for the frontend to
+                # RENDER (P6-1c). Distinct from navigation.sensed_lead_* above,
+                # which is the ego's own sensor output used for control -- the
+                # HMI is allowed to see the full scene, the planner is not.
+                "npcs": physics.get_npc_states(),
+                # P6-2: the local planner's last scored lateral-candidate set
+                # (dimmed alternatives + the chosen path), for the HMI (P6-5)
+                # to visualise and for the P6-6 evaluation.
+                "planner_candidates": physics.get_planner_candidates(),
             }
 
             if not disconnected:

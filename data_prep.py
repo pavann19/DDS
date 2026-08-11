@@ -2,27 +2,7 @@ import pandas as pd
 import numpy as np
 import json
 
-def create_sequences(df, features, target_col, window_size=10):
-    """
-    Creates sequences for LSTM training.
-    Returns (X_seq, y_seq) where X_seq is of shape (samples, window_size, features)
-    and y_seq is (samples,)
-    """
-    # Map string labels to numeric for sequence generation
-    df_copy = df.copy()
-    df_copy['target_numeric'] = df_copy[target_col].astype('category').cat.codes
-    
-    X = df_copy[features].values
-    y = df_copy['target_numeric'].values
-    
-    X_seq, y_seq = [], []
-    for i in range(len(df_copy) - window_size):
-        X_seq.append(X[i:i+window_size])
-        y_seq.append(y[i+window_size])
-        
-    return np.array(X_seq), np.array(y_seq)
-
-def prep_dataset(input_file="OBD_2_dataset.csv", output_file="processed_telemetry.csv", window_size=10):
+def prep_dataset(input_file="OBD_2_dataset.csv", output_file="processed_telemetry.csv"):
     """
     Processes raw OBD-II telemetry data into a clean, ML-ready dataset.
     
@@ -103,11 +83,5 @@ def prep_dataset(input_file="OBD_2_dataset.csv", output_file="processed_telemetr
         json.dump(feature_info, f, indent=2)
     print(f"\nFeature info saved to feature_info.json")
 
-    # Generate sequences for LSTM
-    print(f"\n🔄 Generating sequences for LSTM (Window Size: {window_size})...")
-    X_seq, y_seq = create_sequences(df, feature_cols, target_col, window_size=window_size)
-    np.savez("sequences.npz", X=X_seq, y=y_seq)
-    print(f"✅ Sequences saved to sequences.npz (Shape: {X_seq.shape})")
-    
 if __name__ == "__main__":
     prep_dataset()
