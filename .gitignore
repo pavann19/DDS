@@ -32,3 +32,13 @@ Thumbs.db
 # Node (frontend/.gitignore already covers node_modules/.next; this is a backstop
 # in case anything is ever run from the repo root)
 node_modules/
+
+# Ad-hoc debug/verification scratch output -- these accumulate fast during
+# live-verification passes (screenshot.png, screenshot_final2.png, etc.) and
+# have zero value once the session that made them ends; the real evidence
+# trail is _evidence/<task>/SUMMARY.md, not loose root-level screenshots.
+# Deliberate screenshots that ARE evidence belong under _evidence/<task>/,
+# not the repo root or frontend/, and should be added with git add -f.
+/screenshot*.png
+/screenshot*.js
+/frontend/screenshot*.png
