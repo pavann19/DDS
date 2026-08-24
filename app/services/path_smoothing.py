@@ -1,5 +1,5 @@
 """
-Spline smoothing + uniform arc-length resampling of OSRM route polylines (P6-1d).
+Spline smoothing + uniform arc-length resampling of OSRM route polylines .
 
 Why this exists
 ---------------

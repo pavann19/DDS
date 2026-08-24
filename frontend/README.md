@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DDS Frontend
 
-## Getting Started
+3D driving visualisation dashboard built with Next.js 15, React Three Fiber, and Three.js.
 
-First, run the development server:
+## Setup
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Opens at [http://localhost:3000](http://localhost:3000). Requires the backend running at `http://localhost:8000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Key Components
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Component | Purpose |
+|-----------|---------|
+| `DriveScene.tsx` | 3D road geometry, ego car, chase camera |
+| `DriveHUD.tsx` | Speed, gear, turn-by-turn HUD overlay |
+| `SimulatedTraffic.tsx` | NPC vehicle rendering from backend state |
+| `SHAPPanel.tsx` | Live SHAP feature attribution chart |
+| `ConnectionStatus.tsx` | WebSocket connection state indicator |
+| `LandingView.tsx` | Pre-connection landing screen |
+| `TripSummary.tsx` | Trip statistics panel |
+| `SettingsPanel.tsx` | User preferences (units, alerts) |
 
-## Learn More
+## Tech
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Next.js 15** with App Router
+- **React Three Fiber** + **Three.js** for 3D rendering
+- **Framer Motion** for UI animations
+- **Tailwind CSS** for styling
+- **WebSocket** for real-time telemetry streaming

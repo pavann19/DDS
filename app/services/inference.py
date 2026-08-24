@@ -94,7 +94,7 @@ class InferencePipeline:
         # Build its input from the raw input_dict directly rather than reusing
         # clean_input, so a classifier feature-set change can never silently
         # break anomaly detection again.
-        # Task P1-3 finding: silently defaulting missing telemetry fields to
+        # silently defaulting missing telemetry fields to
         # 0.0 (below) let a reading missing 6 of 7 fields predict at 97.7%
         # confidence with no anomaly flag at all -- a real risk if an
         # upstream sensor/physics-engine field ever drops out. Detect

@@ -88,7 +88,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     await create_stream_session(session_id)
 
-    # P3-1: fetch a real road-following route in the background (the
+    #  fetch a real road-following route in the background (the
     # routing call can take 1-2s -- the car keeps driving on the
     # straight-line fallback in the meantime, then snaps onto the real
     # route once this resolves). Pushed to the client as a one-time
@@ -111,7 +111,7 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             await websocket.send_json({
                 "type": "route",
-                # P6-1d: send physics.route (the spline-smoothed, uniformly
+                #  send physics.route (the spline-smoothed, uniformly
                 # resampled path) rather than the raw OSRM waypoints, so the
                 # rendered road is exactly the path the car is actually
                 # driving. Sending the raw polyline here would reintroduce the
@@ -191,13 +191,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 "shap": result["shap_result"],
                 "anomaly": result["anomaly_result"],
                 "driver_score": score_data,
-                # P6-1b: server-side NPC traffic state, for the frontend to
-                # RENDER (P6-1c). Distinct from navigation.sensed_lead_* above,
+                #  server-side NPC traffic state, for the frontend to
+                # RENDER . Distinct from navigation.sensed_lead_* above,
                 # which is the ego's own sensor output used for control -- the
                 # HMI is allowed to see the full scene, the planner is not.
                 "npcs": physics.get_npc_states(),
-                # P6-2: the local planner's last scored lateral-candidate set
-                # (dimmed alternatives + the chosen path), for the HMI (P6-5)
+                #  the local planner's last scored lateral-candidate set
+                # (dimmed alternatives + the chosen path), for the HMI 
                 # to visualise and for the P6-6 evaluation.
                 "planner_candidates": physics.get_planner_candidates(),
             }

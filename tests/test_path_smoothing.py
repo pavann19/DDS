@@ -1,5 +1,5 @@
 """
-Unit tests for app/services/path_smoothing.py (P6-1d): centripetal
+Unit tests for app/services/path_smoothing.py : centripetal
 Catmull-Rom smoothing + uniform arc-length resampling of OSRM route polylines.
 """
 import math

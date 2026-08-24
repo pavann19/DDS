@@ -45,8 +45,8 @@ export default function LandingView({ connectionState }: LandingViewProps) {
         </motion.div>
 
         {/* Brand / Title */}
-        <h1 className="text-3xl font-light tracking-[0.3em] mb-2">PROJECT <span className="font-semibold text-blue-500">ANTIGRAVITY</span></h1>
-        <div className="text-sm tracking-[0.4em] text-gray-500 mb-16">INTELLIGENT TELEMETRY SYSTEM</div>
+        <h1 className="text-3xl font-light tracking-[0.3em] mb-2"><span className="font-semibold text-blue-500">DDS</span></h1>
+        <div className="text-sm tracking-[0.4em] text-gray-500 mb-16">DRIVING DECISION SYSTEM</div>
 
         {/* Status indicator */}
         <div className="flex flex-col items-center">

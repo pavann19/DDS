@@ -199,7 +199,7 @@ def test_get_navigation_state_returns_expected_keys():
 
 
 # ---------------------------------------------------------------------------
-# P6-1: kinematic bicycle model + jerk-limited longitudinal control.
+#  kinematic bicycle model + jerk-limited longitudinal control.
 #
 # These lock in PHYSICAL guarantees the pre-P6 point-mass controller did not
 # provide. Measured during development, the legacy controller reached ~22 m/s^2
@@ -355,7 +355,7 @@ def test_route_progress_recovers_after_overshooting_a_corner():
 
 
 # ---------------------------------------------------------------------------
-# P6-1b: server-side NPC traffic + forward range sensor, wired into
+#  server-side NPC traffic + forward range sensor, wired into
 # PhysicsEngine. See app/services/traffic.py for the underlying model tests.
 # ---------------------------------------------------------------------------
 
@@ -434,7 +434,7 @@ def test_station_m_advances_with_real_movement_even_while_route_index_is_small()
 
 
 def test_car_does_not_spiral_off_a_long_dense_route():
-    """Regression (P6-1d): the steering lookahead was `max(8, 0.8*v)` ~= 11 m,
+    """Regression : the steering lookahead was `max(8, 0.8*v)` ~= 11 m,
     which only worked because it happened to step past one raw OSRM waypoint
     (~21 m average spacing), giving ~21 m of lookahead by accident. Uniform
     5 m resampling removed that accident, leaving a genuinely 11 m lookahead --
@@ -459,8 +459,8 @@ def test_car_does_not_spiral_off_a_long_dense_route():
 
 
 # ---------------------------------------------------------------------------
-# P6-2: Frenet local planner + pure-pursuit lateral control. Replaces the
-# P6-1 proportional heading controller for any ROUTED bicycle-controller
+#  Frenet local planner + pure-pursuit lateral control. Replaces the
+# proportional heading controller for any ROUTED bicycle-controller
 # drive. See app/services/frenet.py and app/services/planner.py for the
 # underlying unit tests of the projection math and candidate scoring; these
 # tests lock in the integration into PhysicsEngine.update().

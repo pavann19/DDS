@@ -25,7 +25,7 @@ class DrivingState(str, Enum):
     ARRIVED = "ARRIVED"
 
 class PhysicsEngine:
-    # --- Vehicle & control parameters (P6-1) ---------------------------------
+    # --- Vehicle & control parameters  ---------------------------------
     # Kinematic bicycle model constants. These replace the previous point-mass
     # model, in which speed was lerped straight toward a target and heading was
     # nudged proportionally -- that model had no notion of acceleration, jerk,
@@ -44,7 +44,7 @@ class PhysicsEngine:
     STEER_KP = 1.2               # proportional gain: heading error (rad) -> demanded steer (rad)
     # Steering lookahead distance: L_d = LOOKAHEAD_K * v + LOOKAHEAD_MIN_M.
     #
-    # P6-1d: this MUST be expressed as a distance in metres, never as a
+    #  this MUST be expressed as a distance in metres, never as a
     # waypoint count. Before route resampling, the lookahead formula
     # (max(8, 0.8*v) ~= 11 m at cruise) happened to step past one raw OSRM
     # waypoint, and since raw spacing averaged ~21 m the car got ~21 m of
@@ -100,35 +100,35 @@ class PhysicsEngine:
         # effect and the ML feature vector). Under the bicycle model this is
         # derived from the real front-wheel angle below.
         self.steering_angle = 0.0
-        # Real physical control state (P6-1).
+        # Real physical control state .
         self.steering_angle_rad = 0.0
         self.acceleration_mps2 = 0.0
-        # Diagnostics surfaced for the HMI / evaluation (P6-6).
+        # Diagnostics surfaced for the HMI / evaluation .
         self.path_curvature = 0.0       # 1/m, max |curvature| in the lookahead window
         self.lateral_accel_mps2 = 0.0   # v^2 * kappa, the comfort-limiting quantity
         self.speed_limit_reason = "cruise"  # which constraint is currently binding
 
-        # Real road-following route (P3-1): a list of (lat, lng) waypoints
+        # Real road-following route : a list of (lat, lng) waypoints
         # from app.services.routing.get_route(), fetched asynchronously by
         # the WebSocket handler and pushed in via set_route(). Empty until
         # a route is fetched or if the routing service is unavailable, in
         # which case navigation falls back to a straight bearing to
-        # target_lat/target_lng (the pre-P3-1 behavior).
+        # target_lat/target_lng (the pre-routing behavior).
         self.route = []
         self.route_index = 0
         self.station_distances = []
         self.current_station_m = 0.0
-        # P6-2: exact Frenet (station, lateral) frame built from the smoothed
+        #  exact Frenet (station, lateral) frame built from the smoothed
         # route in set_route(); None until a real route is set. current_d_m is
         # the ego's own exact signed lateral offset from the route centreline
         # (positive = right / same-direction lane, matching traffic.py's
         # LANE_OFFSETS convention). lateral_target_d_m is the planner's
         # currently-tracked target (rate-limited toward the winning
         # candidate); planner_candidates/chosen_d_m are the last tick's
-        # scored candidate set, surfaced for the HMI (P6-5) and P6-6.
+        # scored candidate set, surfaced for the HMI  and P6-6.
         self.frenet_frame = None
         # Separate from route_index deliberately: route_index is a coarser
-        # NEAREST-WAYPOINT heuristic (P6-1's projection), which can advance
+        # NEAREST-WAYPOINT heuristic (the coarser projection), which can advance
         # past the segment that is still the true closest-by-perpendicular-
         # distance match for exact projection (e.g. just past a waypoint's
         # midpoint but still short of the perpendicular foot on the segment
@@ -150,10 +150,10 @@ class PhysicsEngine:
         # set_destination(). Without a latch the target speed is a pure
         # function of the CURRENT distance to the destination, so a car that
         # coasts a few metres past it sees the distance grow, re-accelerates to
-        # cruise, turns around, and orbits forever -- observed during P6-1
+        # cruise, turns around, and orbits forever -- observed during development
         # development once the bicycle model made overshoot possible.
         self.has_arrived = False
-        # P6-1b: server-side NPC traffic + forward range sensor. Created in
+        #  server-side NPC traffic + forward range sensor. Created in
         # set_route() once route length is known; None until then. Deliberately
         # NOT accessed directly anywhere except via sense_lead_vehicle()/
         # get_npc_states() below -- see traffic.py's module docstring for why
@@ -214,7 +214,7 @@ class PhysicsEngine:
                 dist = self.calculate_distance(self.route[i-1][0], self.route[i-1][1], self.route[i][0], self.route[i][1])
                 self.station_distances.append(self.station_distances[-1] + dist)
 
-        # P6-2: exact Frenet frame for the new route (None if there is no
+        #  exact Frenet frame for the new route (None if there is no
         # route). Built from the SAME smoothed waypoint list station_distances
         # above was computed from, so the two stay consistent.
         self.frenet_frame = build_frenet_frame(self.route) if self.route else None
@@ -224,7 +224,7 @@ class PhysicsEngine:
         self.planner_candidates = []
         self.planner_chosen_d_m = LANE_CENTER_D_M
 
-        # P6-1b: (re)spawn traffic for the new route's length. A fresh
+        #  (re)spawn traffic for the new route's length. A fresh
         # TrafficModel on every set_route() call means a new destination gets
         # a newly-seeded traffic pattern rather than NPCs left over from the
         # previous route's (now irrelevant) length.
@@ -259,7 +259,7 @@ class PhysicsEngine:
 
         # Navigation
         #
-        # P3-1: if a real road-following route is set, steer toward the
+        #  if a real road-following route is set, steer toward the
         # next waypoint in sequence (advancing once close enough) instead
         # of a straight bearing to the final destination -- this is what
         # makes the car actually follow real road geometry/turns rather
@@ -269,7 +269,7 @@ class PhysicsEngine:
         # brake at every intermediate waypoint along the route.
         WAYPOINT_ARRIVAL_RADIUS = 15.0
         if self.route and self.route_index < len(self.route):
-            # P6-1 bug fix: advance along the route by PROJECTION (nearest
+            # bug fix: advance along the route by PROJECTION (nearest
             # waypoint ahead), not by proximity to the current one.
             #
             # The previous logic advanced route_index only while within
@@ -279,7 +279,7 @@ class PhysicsEngine:
             # Under the physically-constrained bicycle model the car can and
             # does overshoot a tight corner, after which the old logic left the
             # index pinned and steered the car BACK to a waypoint behind it:
-            # observed during P6-1 development as the car orbiting the
+            # observed during early development as the car orbiting the
             # destination and never arriving (stuck at index 17 of 29).
             # Projection is also the natural precursor to the Frenet station
             # coordinate that P6-2 builds on.
@@ -325,7 +325,7 @@ class PhysicsEngine:
         CORNER_LOOKAHEAD_M = 60.0  # ~4s of braking distance at cruise speed -- enough for the speed lerp to actually slow down before reaching the corner
         CORNER_MAX_TURN_DEG = 90.0
         CORNER_MIN_SPEED = 15.0
-        # P6-1: alongside the existing corner_turn_deg (still used by the
+        #  alongside the existing corner_turn_deg (still used by the
         # behavioural state machine), compute the path CURVATURE
         # kappa = d(heading)/d(arc length) [1/m]. Curvature is the physically
         # meaningful quantity: the comfort/grip limit on cornering speed is
@@ -353,7 +353,7 @@ class PhysicsEngine:
                 idx += 1
         self.path_curvature = max_curvature
 
-        # P6-2: exact Frenet projection of the ego's real position, when a
+        #  exact Frenet projection of the ego's real position, when a
         # route (and therefore a Frenet frame) exists. This REPLACES the old
         # `station_distances[route_index]` approximation -- see the long
         # comment this used to carry, now obsolete: that approximation was
@@ -392,7 +392,7 @@ class PhysicsEngine:
                 self.heading = (self.heading + turn + 360) % 360
                 self.steering_angle = turn / max(0.01, turn_rate) if turn_rate > 0 else 0
             else:
-                # P6-1 kinematic bicycle model. The controller commands a front-wheel
+                # kinematic bicycle model. The controller commands a front-wheel
                 # ANGLE; heading is then a consequence of vehicle geometry and speed
                 # (yaw_rate = v*tan(delta)/L) rather than being written directly.
                 v_mps = self.speed_kmh / 3.6
@@ -403,7 +403,7 @@ class PhysicsEngine:
                 #     delta_max(v) = atan(A_LAT_MAX * L / v^2).
                 # Without this, a 35 deg wheel angle at 50 km/h implies ~200 deg/s
                 # of yaw and >20 m/s^2 lateral acceleration -- measured during
-                # P6-1 development, and worse than the legacy controller it
+                # development, and worse than the legacy controller it
                 # replaces. The geometric MAX_STEER_RAD still applies at parking
                 # speeds, where it is the real limit.
                 if v_mps > 0.5:
@@ -413,7 +413,7 @@ class PhysicsEngine:
                     steer_limit = self.MAX_STEER_RAD
 
                 if self.frenet_frame is not None:
-                    # P6-2: Frenet local planner + pure pursuit. This REPLACES
+                    #  Frenet local planner + pure pursuit. This REPLACES
                     # the proportional heading controller below (which chased
                     # a raw route waypoint, with no notion of "lane") for any
                     # routed bicycle-controller drive. Candidates are lateral
@@ -471,7 +471,7 @@ class PhysicsEngine:
                 max_step = self.STEER_RATE_MAX_RADPS * dt
                 self.steering_angle_rad -= max(-max_step, min(max_step, self.steering_angle_rad))
 
-        # P6-1b: advance traffic and refresh the forward range sensor from the
+        #  advance traffic and refresh the forward range sensor from the
         # ego's own station_m -- the same quantity just computed above, so the
         # sensor is always consistent with the position actually being driven.
         if self.traffic is not None:
@@ -560,7 +560,7 @@ class PhysicsEngine:
                 corner_speed_cap = CORNER_MIN_SPEED + (CRUISE_SPEED - CORNER_MIN_SPEED) * corner_factor
                 target_speed = min(target_speed, corner_speed_cap)
         else:
-            # P6-1: derive the cornering limit from physics instead. Holding
+            #  derive the cornering limit from physics instead. Holding
             # lateral acceleration at or below A_LAT_MAX gives
             #     v_max = sqrt(a_lat_max / kappa)
             # so a gentle curve barely slows the car while a tight intersection
@@ -580,7 +580,7 @@ class PhysicsEngine:
             self.speed_kmh += speed_diff * dt * 2.0
             self.speed_kmh = max(0.0, min(self.speed_kmh, 160.0))
         else:
-            # P6-1 jerk-limited longitudinal control. The previous model wrote
+            # jerk-limited longitudinal control. The previous model wrote
             # speed directly (speed += (target - speed) * dt * 2.0), which allows
             # unbounded acceleration and unbounded jerk -- the discontinuities
             # that read on screen as flickering/teleporting motion. Here the
@@ -631,7 +631,7 @@ class PhysicsEngine:
         # Coolant, Fuel, CO2
         heat_gen = (self.rpm / 4000.0) * 2.0
         # Passive radiator/fan cooling floor so coolant doesn't run away to the clamp
-        # ceiling while idling at speed_kmh == 0 (P1-7).
+        # ceiling while idling at speed_kmh == 0 .
         cooling = 0.5 + (self.speed_kmh / 120.0) * 1.5
         self.coolant_temp += (heat_gen - cooling) * dt
         self.coolant_temp = max(70.0, min(self.coolant_temp, 110.0))
@@ -689,7 +689,7 @@ class PhysicsEngine:
             "heading": self.heading,
             "speed": self.speed_kmh,
             "steering": self.steering_angle,
-            # P3-1: how far along the current route the car is. The full
+            #  how far along the current route the car is. The full
             # waypoint list is pushed once (via a separate "route" WS
             # message, sent whenever a new route is fetched) rather than
             # resent every tick -- the frontend slices its stored route
@@ -699,7 +699,7 @@ class PhysicsEngine:
             "has_route": bool(self.route),
             "driving_state": self.driving_state,
             "station_m": self.current_station_m,
-            # P6-1 control/diagnostic state. Surfaced for the HMI (P6-5) and
+            # control/diagnostic state. Surfaced for the HMI  and
             # for the A/B evaluation in P6-6.
             "controller": self.controller,
             "acceleration": self.acceleration_mps2,
@@ -707,13 +707,13 @@ class PhysicsEngine:
             "path_curvature": self.path_curvature,
             "lateral_accel": self.lateral_accel_mps2,
             "speed_limit_reason": self.speed_limit_reason,
-            # P6-1b: forward range-sensor output (gap + relative speed to the
+            #  forward range-sensor output (gap + relative speed to the
             # nearest same-lane vehicle ahead), or null if nothing is sensed.
             # This is DELIBERATELY the only NPC-related information available
             # through the normal navigation state -- see traffic.py.
             "sensed_lead_gap_m": self.sensed_lead.gap_m if self.sensed_lead else None,
             "sensed_lead_speed_kmh": self.sensed_lead.lead_speed_kmh if self.sensed_lead else None,
-            # P6-2: exact Frenet lateral offset (signed, metres, positive =
+            #  exact Frenet lateral offset (signed, metres, positive =
             # right/same-direction lane) and the planner's current tracked
             # target -- the frontend's hard-coded LANE_OFFSET_M render hack
             # is replaced by rendering AT this real value, so the HMI shows
@@ -724,8 +724,8 @@ class PhysicsEngine:
         }
 
     def get_planner_candidates(self):
-        """The last tick's scored lateral candidate set (P6-2), for the HMI
-        (P6-5) to render dimmed alternatives alongside the chosen path, and
+        """The last tick's scored lateral candidate set , for the HMI
+         to render dimmed alternatives alongside the chosen path, and
         for the P6-6 evaluation. Separate from get_navigation_state() to keep
         that payload small at 10Hz -- callers that don't need the full
         candidate breakdown (most ticks, most of the time) don't pay for it."""
@@ -739,7 +739,7 @@ class PhysicsEngine:
         ]
 
     def get_npc_states(self):
-        """Full NPC state for the HMI renderer (P6-1c) -- a rendering
+        """Full NPC state for the HMI renderer  -- a rendering
         concern, distinct from what the ego's own sensor may perceive for
         control purposes (get_navigation_state()'s sensed_lead_* fields)."""
         return self.traffic.get_npc_states() if self.traffic is not None else []

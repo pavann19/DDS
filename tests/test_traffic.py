@@ -1,7 +1,7 @@
 """
-Unit tests for app/services/traffic.py (P6-1b): server-side NPC traffic +
+Unit tests for app/services/traffic.py : server-side NPC traffic +
 the forward range-sensor model that gives PhysicsEngine's IDM controller
-(P6-3) real sensing instead of oracle access to NPC state.
+ real sensing instead of oracle access to NPC state.
 """
 import pytest
 

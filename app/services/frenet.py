@@ -1,7 +1,7 @@
 """
 Frenet (station-lateral) frame utilities for P6-2's local planner.
 
-`current_station_m` (P6-1b) and its `station_distances[route_index]`
+`current_station_m`  and its `station_distances[route_index]`
 approximation were always a stopgap -- accurate only to within one
 inter-waypoint spacing, and P6-1b's own comment said as much: "P6-2's proper
 Frenet frame will replace this with exact segment projection." This module

@@ -1,8 +1,5 @@
 # Python
 venv/
-# Isolated Python 3.12 environment for MetaDrive (P5-3a) -- MetaDrive requires
-# Python <3.13, incompatible with the main venv/'s 3.13. Entirely separate
-# from the app; large binary packages, never committed.
 venv_metadrive/
 __pycache__/
 *.pyc
@@ -11,34 +8,52 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Runtime / generated at runtime, not source
+# Trained model artifacts (regenerate via model_pipeline.py)
+*.pkl
+anomaly_feature_bounds.json
+feature_info.json
+optimal_features.json
+metrics.json
+
+# Processed/derived data (regenerate via data_prep.py)
+processed_telemetry.csv
+
+# Runtime database
 dds_telemetry.db
 dds_telemetry.db-shm
 dds_telemetry.db-wal
 *.log
 
-# Env
+# Environment
 .env
 !.env.example
 
-# Evidence/context-pack working files are tracked (small, source-of-truth for the verification protocol)
+# Development notes (local-only)
+.dev_notes/
+Gemini_plans/
+STATE.md
+AUDIT_PROTOCOL.md
+VERIFICATION_PROTOCOL.md
+THESIS_PLAN.md
+PHASE*_TASK_BOARD.md
+_context_packs/
+_evidence/
 
-# OS/editor
+# AI tool configs
+.claude/
+CLAUDE.md
+AGENTS.md
+
+# OS / Editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# Node (frontend/.gitignore already covers node_modules/.next; this is a backstop
-# in case anything is ever run from the repo root)
+# Node (backstop for repo root)
 node_modules/
 
-# Ad-hoc debug/verification scratch output -- these accumulate fast during
-# live-verification passes (screenshot.png, screenshot_final2.png, etc.) and
-# have zero value once the session that made them ends; the real evidence
-# trail is _evidence/<task>/SUMMARY.md, not loose root-level screenshots.
-# Deliberate screenshots that ARE evidence belong under _evidence/<task>/,
-# not the repo root or frontend/, and should be added with git add -f.
+# Debug screenshots
 /screenshot*.png
 /screenshot*.js
 /frontend/screenshot*.png

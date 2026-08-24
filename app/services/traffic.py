@@ -1,5 +1,5 @@
 """
-Server-side NPC traffic simulation + a forward range-sensor model (P6-1b).
+Server-side NPC traffic simulation + a forward range-sensor model .
 
 Context (2026-07-20 architecture decision, see PHASE_6_TASK_BOARD.md): the
 project needed genuine sensor detection instead of a planner that reads
@@ -22,7 +22,7 @@ of one with oracle access.
 Scoping note for the thesis report: this is a simplified 1D forward-cone
 range sensor (gap + relative speed to the nearest same-lane vehicle ahead),
 not a full 3D LIDAR point cloud or camera-based detector. That fidelity is
-adequate for single-lane car-following (P6-3) and is honestly described as
+adequate for single-lane car-following  and is honestly described as
 such -- see PHASE_6_TASK_BOARD.md's P6-7 for the later, real-vision-model
 addition ("Option 2" of the sensing decision).
 
@@ -54,7 +54,7 @@ MAX_NPC_SPEED_KMH = 60.0
 VISIBILITY_WINDOW_M = 150.0
 RECYCLE_SPREAD_FRACTION = 0.8
 
-# Forward range-sensor parameters (P6-1b). A real narrow-beam radar/LIDAR
+# Forward range-sensor parameters . A real narrow-beam radar/LIDAR
 # forward sensor, not omnidirectional and not full-scene.
 SENSOR_MAX_RANGE_M = 100.0
 SENSOR_LANE_TOLERANCE_M = 1.75  # half a lane width either side of the queried lane
@@ -149,7 +149,7 @@ class TrafficModel:
         return best
 
     def get_npc_states(self) -> List[dict]:
-        """Full NPC state for streaming to the frontend renderer (P6-1c) --
+        """Full NPC state for streaming to the frontend renderer  --
         this is a rendering concern, separate from what the ego's sensor is
         allowed to perceive for control purposes."""
         return [
