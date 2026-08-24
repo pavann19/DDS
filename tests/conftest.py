@@ -84,9 +84,20 @@ def setup_ml_artifacts():
         "CO2_Delta": {"min": -100.0, "max": 100.0},
         "Fuel_Rate_Delta": {"min": -10.0, "max": 10.0}
     }
+
     with open(base_dir / "anomaly_feature_bounds.json", "w") as f:
         json.dump(anomaly_bounds, f)
-    
+
+    # Reload the inference pipeline AFTER all ML artifacts exist.
+    from app.services import inference as inference_module
+    inference_module.pipeline = inference_module.InferencePipeline()
+
+    # Confirm the test environment is actually ready.
+    assert inference_module.pipeline.is_ready(), (
+        f"Test ML pipeline failed to initialize: "
+        f"{inference_module.pipeline.get_errors()}"
+    )
+
     yield
     
     # Cleanup: remove generated artifacts after tests
