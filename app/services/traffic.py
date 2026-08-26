@@ -106,6 +106,13 @@ class NpcVehicle:
     # car-following. Fixed at spawn time, mirroring how the ego's own
     # cruise speed is a fixed target the IDM composition falls back to.
     desired_speed_kmh: float = 0.0
+    prevent_recycle: bool = False
+    # Perception-layer classification (app/services/perception/entities.py's
+    # EntityClass, kept as a plain string here so traffic.py has no import
+    # dependency on the perception package). Defaults to SEDAN, which is
+    # every NPC's real behaviour before this field existed -- adding it
+    # changes nothing for existing scenarios/tests.
+    entity_class: str = "SEDAN"
 
 
 @dataclass
@@ -115,6 +122,13 @@ class SensedLeadVehicle:
     scene -- this is the whole point of the perception/control boundary."""
     gap_m: float
     lead_speed_kmh: float
+
+
+DENSITY_NPC_COUNTS = {
+    "low": 4,
+    "medium": 8,
+    "high": 14,
+}
 
 
 @dataclass
@@ -130,12 +144,18 @@ class TrafficModel:
     total_length_m: float
     seed: Optional[int] = None
     npcs: List[NpcVehicle] = field(default_factory=list)
+    density: str = "medium"
     _rng: random.Random = field(default=None, repr=False)
 
     def __post_init__(self):
         self._rng = random.Random(self.seed)
-        if self.total_length_m > 0:
-            self.npcs = [self._spawn(i) for i in range(NPC_COUNT)]
+        if self.total_length_m > 0 and not self.npcs:
+            count = DENSITY_NPC_COUNTS.get(self.density.lower(), NPC_COUNT)
+            self.npcs = [self._spawn(i) for i in range(count)]
+
+    def spawn_scripted_npcs(self, npcs: List[NpcVehicle]) -> None:
+        """Replace active NPCs with a deterministic, scripted list of scenario actors."""
+        self.npcs = list(npcs)
 
     def _spawn(self, i: int) -> NpcVehicle:
         is_oncoming = i % 2 == 0
@@ -206,7 +226,7 @@ class TrafficModel:
             elif npc.station_m < 0:
                 npc.station_m = self.total_length_m
 
-            if abs(npc.station_m - ego_station_m) > VISIBILITY_WINDOW_M:
+            if not npc.prevent_recycle and abs(npc.station_m - ego_station_m) > VISIBILITY_WINDOW_M:
                 spread = (self._rng.random() - 0.5) * 2 * VISIBILITY_WINDOW_M * RECYCLE_SPREAD_FRACTION
                 npc.station_m = max(0.0, min(self.total_length_m, ego_station_m + spread))
                 # A recycled NPC may have been mid-queue (slowed well below

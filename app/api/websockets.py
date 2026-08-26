@@ -12,6 +12,7 @@ from app.services.inference import pipeline
 from app.services.physics_engine import PhysicsEngine
 from app.services.driver_scoring import DriverScorer
 from app.services.routing import get_route
+from app.services.scenario_engine import ScenarioEngine
 from sqlalchemy.future import select
 from datetime import datetime
 
@@ -78,6 +79,7 @@ async def websocket_endpoint(websocket: WebSocket):
     scorer = DriverScorer(window_size=60)
     physics = PhysicsEngine(start_lat=37.7749, start_lng=-122.4194)
     physics.set_destination(37.8199, -122.4783) # Default: Golden Gate Bridge
+    scenario_engine = ScenarioEngine()
     
     disconnected = False
     final_status = "completed"
@@ -132,11 +134,41 @@ async def websocket_endpoint(websocket: WebSocket):
                 data = await websocket.receive_text()
                 try:
                     payload = json.loads(data)
-                    if payload.get("type") == "set_destination":
+                    cmd_type = payload.get("type")
+                    if cmd_type == "set_destination":
                         cmd = SetDestinationCommand(**payload)
                         physics.set_destination(cmd.lat, cmd.lng)
                         logger.info(f"New destination set: {cmd.lat}, {cmd.lng}")
                         asyncio.create_task(fetch_and_apply_route(physics.lat, physics.lng, cmd.lat, cmd.lng))
+                    elif cmd_type == "load_scenario":
+                        scenario_id = payload.get("scenario_id")
+                        density = payload.get("traffic_density")
+                        initial_speed = payload.get("initial_speed_kmh")
+                        if scenario_id:
+                            evt = scenario_engine.load_scenario(
+                                scenario_id,
+                                physics,
+                                density=density,
+                                initial_speed_kmh=initial_speed,
+                            )
+                            logger.info(f"Scenario loaded: {scenario_id}")
+                            await websocket.send_json(evt)
+                    elif cmd_type == "pause_simulation":
+                        scenario_engine.pause(physics)
+                        logger.info("Simulation paused")
+                    elif cmd_type == "resume_simulation":
+                        scenario_engine.resume(physics)
+                        logger.info("Simulation resumed")
+                    elif cmd_type == "reset_simulation":
+                        evt = scenario_engine.reset(physics)
+                        logger.info("Simulation reset")
+                        if evt and isinstance(evt, dict) and "type" in evt:
+                            await websocket.send_json(evt)
+                    elif cmd_type == "step_simulation":
+                        physics.is_paused = False
+                        physics.update(current_action)
+                        physics.is_paused = True
+                        logger.info("Simulation stepped 1 tick")
                 except json.JSONDecodeError:
                     logger.warning("Invalid JSON received on websocket")
                 except ValidationError as e:
@@ -163,9 +195,17 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=1011)
             return
 
+        SIMULATION_STEP_DT = 0.1  # 10 Hz fixed simulation step for deterministic physics-scenario synchronization
+
         while not disconnected:
-            # Update Physics Engine
-            physics.update(current_action)
+            # Update Scenario Engine and Physics Engine with the identical fixed simulation dt
+            # Eliminates wall-clock inference jitter desync between tick-based milestones and vehicle kinematics
+            scenario_event = scenario_engine.update(physics, SIMULATION_STEP_DT)
+            if scenario_event and not disconnected:
+                await websocket.send_json(scenario_event)
+
+            # Update Physics Engine with the exact same simulation step
+            physics.update(current_action, dt=SIMULATION_STEP_DT)
             nav_state = physics.get_navigation_state()
             input_dict = physics.get_ml_features()
             
@@ -293,7 +333,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Independent safety layer (Safety Shield), evaluated
                     # AFTER the planner/IDM decision -- see
                     # app/services/safety_shield.py's module docstring.
-                    "safety_shield": physics.get_safety_shield_state()
+                    "safety_shield": physics.get_safety_shield_state(),
+                    "scenario": scenario_engine.get_state(),
+                    # Phase 6: 360-degree surround perception -- confirmed
+                    # tracks only (tentative/coasted tracks are internal
+                    # tracker state, not yet a stable-enough signal for the
+                    # HMI to render).
+                    "surround_perception": physics.get_surround_perception_state()
                 }
             }
 

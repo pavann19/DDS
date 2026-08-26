@@ -204,15 +204,21 @@ unchanged; still not started. Turns the demo from "watch it drive" into
 Waymo-style demo (their own demo reels are curated scenarios, not raw
 unscripted drives).
 
-- [ ] Deterministic scenario definitions (normal, traffic, maneuver,
-      safety-critical), fixed seeds.
-- [ ] Scenario control surface: select scenario / traffic density / initial
-      speed; start / pause / reset.
-- [ ] Frontend control room UI for the above.
-- [ ] At least 3 scenarios demoable end-to-end with the Safety Shield
-      (Phase 1) visibly engaging in at least one of them, and Phase 3's
+- [x] Deterministic scenario definitions (normal, traffic, maneuver,
+      safety-critical), fixed seeds (`app/services/scenario_engine.py`:
+      `normal_cruising` [seed 42], `traffic_overtake` [seed 101],
+      `emergency_cut_in` [seed 202], `queue_stop_and_go` [seed 303]).
+- [x] Scenario control surface: select scenario / traffic density / initial
+      speed; start / pause / resume / reset / step (`ScenarioEngine` + WebSocket
+      command protocol + REST `GET /api/scenarios`).
+- [x] Frontend control room UI for the above (`ScenarioControlRoom.tsx`,
+      integrated into `DriveMode.tsx`, `DeveloperMode.tsx`, `CommandPalette.tsx`).
+- [x] At least 3 scenarios demoable end-to-end with the Safety Shield
+      (Phase 1) visibly engaging in at least one of them (`emergency_cut_in`
+      triggering TTC override `OVERRIDE_EMERGENCY_BRAKE`), and Phase 3's
       candidate-path visualization visibly showing a lane-change decision
-      in another.
+      in another (`traffic_overtake` triggering `is_lane_change=True`).
+      All 9 automated scenario unit/integration tests and 168/168 suite tests passing.
 
 ---
 

@@ -2,6 +2,7 @@ import math
 import random
 import time
 from enum import Enum
+from typing import Optional, List, Dict, Any
 
 from app.services.traffic import TrafficModel, EGO_LANE_OFFSET_M, ADJACENT_LANE_OFFSET_M
 from app.services.path_smoothing import smooth_route
@@ -14,6 +15,7 @@ from app.services.frenet import (
 )
 from app.services.car_following import idm_acceleration
 from app.services import safety_shield
+from app.services.perception.perception_engine import SurroundPerceptionEngine
 from app.services.planner import (
     LANE_CENTER_D_M,
     PLANNING_HORIZON_S,
@@ -179,7 +181,13 @@ class PhysicsEngine:
         # that boundary matters.
         self.traffic = None
         self.sensed_lead = None  # traffic.SensedLeadVehicle | None, refreshed every tick
-        
+
+        # Phase 6: 360-degree surround perception (sensor_rig + tracking +
+        # occupancy grid) -- one engine per PhysicsEngine session, same
+        # lifetime as self.traffic.
+        self.surround_perception = SurroundPerceptionEngine()
+        self.surround_tracks = []
+
         self.speed_kmh = 0.0
         self.rpm = 800.0
         self.coolant_temp = 80.0
@@ -200,6 +208,8 @@ class PhysicsEngine:
         self.last_co2 = 0.0
         self.last_fuel = 0.0
         self.last_update_time = time.time()
+        self.is_paused = False
+        self.active_scenario = None
 
     def set_destination(self, lat, lng):
         self.target_lat = lat
@@ -284,10 +294,13 @@ class PhysicsEngine:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
         return R * c
 
-    def update(self, ai_decision: str):
+    def update(self, ai_decision: str, dt: Optional[float] = None):
         now = time.time()
-        dt = min(now - self.last_update_time, 0.5)
+        if dt is None:
+            dt = min(now - self.last_update_time, 0.5)
         self.last_update_time = now
+        if self.is_paused:
+            return
         # Captured before any steering/heading integration so the realised yaw
         # rate (and hence lateral acceleration) can be measured at the end.
         heading_before_update = self.heading
@@ -412,6 +425,43 @@ class PhysicsEngine:
             self.current_station_m = 0.0
             self.current_lateral_offset_m = 0.0
 
+        # Advance traffic and refresh the forward range sensor from the
+        # ego's own station_m and real-time lateral offset -- the same quantities
+        # just computed above, so the sensor is always consistent with the position
+        # actually being driven. Placed here BEFORE candidate planning and IDM speed
+        # control so both see the real, current-tick lead vehicle rather than last-tick's state.
+        #
+        # Real bug fix: this used to sense against a HARDCODED lane position
+        # (EGO_LANE_OFFSET_M, a constant 1.75m) instead of the ego's actual real-time
+        # current_lateral_offset_m. The ego's real lateral position legitimately
+        # fluctuates (cornering, and now real lane changes), so once it drifted toward
+        # the far lane the sensor kept checking the near lane: it detected nothing
+        # actually in front of the car, and detected phantom traffic in a lane the car
+        # wasn't in. This is why the car could drive straight through an NPC that was
+        # visually right in front of it -- IDM never saw it, because the sensor was
+        # never told where the car actually was.
+        if self.traffic is not None:
+            self.traffic.update(dt, self.current_station_m)
+            self.sensed_lead = self.traffic.sense_lead_vehicle(
+                self.current_station_m, ego_lane_offset=self.current_lateral_offset_m
+            )
+        else:
+            self.sensed_lead = None
+
+        # Phase 6: the 360-degree surround perception layer (sensor_rig +
+        # multi-class tracking + occupancy grid), separate from the forward
+        # sensor above -- sense_lead_vehicle() is what IDM/the planner
+        # actually consume for car-following and is left untouched; this is
+        # additional situational awareness (blind-spot/rear traffic) for the
+        # HMI, not yet wired into any driving decision.
+        if self.traffic is not None and self.frenet_frame is not None:
+            self.surround_tracks = self.surround_perception.step(
+                self.frenet_frame, self.current_station_m, self.current_lateral_offset_m,
+                self.traffic.npcs, dt,
+            )
+        else:
+            self.surround_tracks = []
+
         if waypoint_dist > 5.0:
             target_heading = self.calculate_bearing(self.lat, self.lng, waypoint_lat, waypoint_lng)
             diff = (target_heading - self.heading + 180) % 360 - 180
@@ -510,28 +560,6 @@ class PhysicsEngine:
                 # Ease the wheel back to centre rather than snapping it.
                 max_step = self.STEER_RATE_MAX_RADPS * dt
                 self.steering_angle_rad -= max(-max_step, min(max_step, self.steering_angle_rad))
-
-        #  advance traffic and refresh the forward range sensor from the
-        # ego's own station_m -- the same quantity just computed above, so the
-        # sensor is always consistent with the position actually being driven.
-        if self.traffic is not None:
-            self.traffic.update(dt, self.current_station_m)
-            # Real bug fix: this used to sense against a HARDCODED lane
-            # position (EGO_LANE_OFFSET_M, a constant) instead of the ego's
-            # actual real-time current_lateral_offset_m. The ego's real
-            # lateral position legitimately fluctuates (cornering, and now
-            # real lane changes -- P6-4), so once it drifted toward the far
-            # lane the sensor kept checking the near lane: it detected
-            # nothing actually in front of the car, and detected phantom
-            # traffic in a lane the car wasn't in. This is why the car
-            # could drive straight through an NPC that was visually right
-            # in front of it -- IDM never saw it, because the sensor was
-            # never told where the car actually was.
-            self.sensed_lead = self.traffic.sense_lead_vehicle(
-                self.current_station_m, ego_lane_offset=self.current_lateral_offset_m
-            )
-        else:
-            self.sensed_lead = None
 
         # State Machine Logic
         # Keyed off has_arrived rather than the raw distance so that a car which
@@ -887,7 +915,44 @@ class PhysicsEngine:
             # constant.
             "lateral_offset_m": self.current_lateral_offset_m,
             "lateral_target_m": self.lateral_target_d_m,
+            "is_paused": self.is_paused,
+            "active_scenario": self.active_scenario,
         }
+
+    def reset_state(
+        self,
+        station_m: float = 0.0,
+        speed_kmh: float = 0.0,
+        lateral_offset_m: float = EGO_LANE_OFFSET_M,
+        heading_deg: Optional[float] = None,
+        target_speed_kmh: float = 50.0,
+    ):
+        """Cleanly reset physical vehicle state for scenario execution without needing to refetch route."""
+        self.current_station_m = station_m
+        self.current_lateral_offset_m = lateral_offset_m
+        self.lateral_target_d_m = lateral_offset_m
+        self.speed_kmh = speed_kmh
+        self.acceleration_mps2 = 0.0
+        self.steering_angle = 0.0
+        self.steering_angle_rad = 0.0
+        self.has_arrived = False
+        self.frenet_search_idx = 0
+        self.route_index = 0
+        self.speed_limit_reason = "cruise"
+        self.shield_verdict = safety_shield.ShieldVerdict(approved=True, risk_level=safety_shield.RISK_NONE)
+        # A scenario reset should not leave stale track IDs/coasted history
+        # from before the reset -- fresh engine, same as every other piece
+        # of per-session state this method resets.
+        self.surround_perception = SurroundPerceptionEngine()
+        self.surround_tracks = []
+
+        if self.frenet_frame is not None:
+            self.lat, self.lng = frenet_to_latlng(self.frenet_frame, station_m, lateral_offset_m)
+            if heading_deg is not None:
+                self.heading = heading_deg
+            else:
+                _, _, dir_x, dir_z = frenet_to_local_xz(self.frenet_frame, station_m, lateral_offset_m)
+                self.heading = (math.degrees(math.atan2(dir_x, -dir_z)) + 360.0) % 360.0
 
     def get_planner_candidates(self):
         """The last tick's scored lateral candidate set , for the HMI
@@ -923,3 +988,12 @@ class PhysicsEngine:
         concern, distinct from what the ego's own sensor may perceive for
         control purposes (get_navigation_state()'s sensed_lead_* fields)."""
         return self.traffic.get_npc_states() if self.traffic is not None else []
+
+    def get_surround_perception_state(self):
+        """Confirmed surround tracks from Phase 6's 360-degree perception
+        layer -- distinct from get_npc_states() (the full simulated-truth
+        NPC list) and from sensed_lead (the forward-only IDM sensor); this
+        is what the ego's own multi-sensor rig + tracker actually confirms,
+        including detections behind/beside the ego the forward sensor never
+        sees."""
+        return self.surround_perception.get_state()

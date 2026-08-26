@@ -1,11 +1,12 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useSimulationStore } from '../../store/useSimulationStore';
 import { DestinationInput } from '../DestinationInput';
+import { ScenarioControlRoom } from '../ScenarioControlRoom';
 import { SafetyPanel } from '../panels/SafetyPanel';
 import { ShieldPanel } from '../panels/ShieldPanel';
-import { Radar } from 'lucide-react';
+import { Radar, Sparkles } from 'lucide-react';
 
 // Real status derived from app/services/physics_engine.py's
 // speed_limit_reason + planner.is_changing_lane -- NOT a decorative label.
@@ -36,6 +37,7 @@ function deriveStatus(reason: string | undefined, isChangingLane: boolean): { la
 
 export function DriveMode() {
   const { ego, perception, isConnected, routeSteps, planner } = useSimulationStore();
+  const [showScenarios, setShowScenarios] = useState(false);
   const leadVehicle = perception.find((p) => p.id === 'sensed_lead_vehicle');
   const nextStep = routeSteps[0];
   const status = deriveStatus(ego?.speed_limit_reason, planner?.is_changing_lane ?? false);
@@ -121,9 +123,26 @@ export function DriveMode() {
         </div>
       </header>
 
-      {/* --- Second row: destination picker, route summary, safety card --- */}
+      {/* --- Second row: destination picker, scenarios launcher, route summary, safety card --- */}
       <div className="flex justify-between items-start pointer-events-none">
-        <DestinationInput />
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2 pointer-events-auto">
+            <DestinationInput />
+            <button
+              onClick={() => setShowScenarios((s) => !s)}
+              className={`flex items-center gap-2 backdrop-blur-xl border rounded-xl px-4 py-2.5 shadow-2xl text-xs font-semibold transition-all ${
+                showScenarios
+                  ? 'bg-[var(--brand)]/20 border-[var(--brand)] text-white ring-1 ring-[var(--brand)]/40'
+                  : 'bg-black/40 border-white/10 text-white/90 hover:border-white/20'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-[var(--brand)]" />
+              <span>Scenarios</span>
+            </button>
+          </div>
+
+          {showScenarios && <ScenarioControlRoom />}
+        </div>
 
         {nextStep && (
           <div className="bg-black/40 backdrop-blur-xl border border-white/10 rounded-xl px-4 py-2.5 shadow-2xl pointer-events-auto">

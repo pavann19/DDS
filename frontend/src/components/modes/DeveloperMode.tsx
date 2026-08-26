@@ -1,5 +1,6 @@
 'use client';
 import { useSimulationStore } from '../../store/useSimulationStore';
+import { ScenarioControlRoom } from '../ScenarioControlRoom';
 import { SafetyPanel } from '../panels/SafetyPanel';
 import { ShieldPanel } from '../panels/ShieldPanel';
 
@@ -27,6 +28,10 @@ export function DeveloperMode() {
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pointer-events-auto overflow-y-auto pb-20">
+        <div className="col-span-full">
+          <ScenarioControlRoom />
+        </div>
+
         <section className="bg-[var(--bg-panel)]/80 backdrop-blur-md border border-[var(--border-default)] rounded-lg p-6 shadow-xl">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-sm font-bold tracking-widest text-[var(--brand)] uppercase">Ego Vehicle</h2>

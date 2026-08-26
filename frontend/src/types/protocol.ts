@@ -102,6 +102,50 @@ export interface DriverScore {
   breakdown: DriverScoreBreakdown;
 }
 
+// app/services/scenario_engine.py's ScenarioEngine.get_state()
+export interface ScenarioState {
+  id: string | null;
+  name: string;
+  category: "normal" | "traffic" | "maneuver" | "safety_critical" | string;
+  description: string;
+  is_paused: boolean;
+  tick: number;
+  elapsed_s: number;
+  density: "low" | "medium" | "high" | string;
+  initial_speed_kmh: number;
+  status: "idle" | "running" | "completed" | "error" | string;
+  milestone: string | null;
+}
+
+export interface ScenarioSummary {
+  id: string;
+  name: string;
+  category: "normal" | "traffic" | "maneuver" | "safety_critical" | string;
+  description: string;
+  seed: number;
+  default_initial_speed_kmh: number;
+  default_density: "low" | "medium" | "high" | string;
+}
+
+// app/services/perception/perception_engine.py's SurroundPerceptionEngine.get_state()
+// -- Phase 6's 360-degree surround perception. Confirmed tracks only (see
+// that method's docstring); a track a real sensor rig hasn't detected in
+// several ticks simply isn't in this list, same perception/control
+// boundary as PerceptionObject/sensed_lead_vehicle.
+export interface SurroundTrack {
+  id: string;
+  class: "SEDAN" | "SUV" | "TRUCK" | "MOTORCYCLE" | "BICYCLE" | "PEDESTRIAN" | "TRAFFIC_CONE" | string;
+  status: "CONFIRMED" | string;
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  range_m: number;
+  azimuth_deg: number;
+  sensors: string[];
+  dims: [number, number, number]; // [length_m, width_m, height_m]
+}
+
 // V2 Protocol Payload
 export interface TelemetryStatePayload {
   protocol_version: "2.0";
@@ -122,6 +166,8 @@ export interface TelemetryStatePayload {
     anomaly: AnomalyResult;
     driver_score: DriverScore;
     safety_shield: SafetyShieldState;
+    scenario?: ScenarioState;
+    surround_perception?: SurroundTrack[];
   };
 }
 

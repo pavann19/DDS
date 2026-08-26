@@ -2,11 +2,16 @@
 import { useEffect, useState } from 'react';
 import { Command } from 'cmdk';
 import { useUISettings } from '../store/useUISettings';
-import { Search, Monitor, TerminalSquare, FlaskConical } from 'lucide-react';
+import { useSimulationStore } from '../store/useSimulationStore';
+import { Search, Monitor, TerminalSquare, FlaskConical, Play, Pause, StepForward, RotateCcw } from 'lucide-react';
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const { setMode } = useUISettings();
+  const loadScenario = useSimulationStore((state) => state.loadScenario);
+  const togglePause = useSimulationStore((state) => state.togglePause);
+  const stepSimulation = useSimulationStore((state) => state.stepSimulation);
+  const resetSimulation = useSimulationStore((state) => state.resetSimulation);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -61,6 +66,58 @@ export function CommandPalette() {
             >
               <FlaskConical className="w-4 h-4 mr-3" />
               Switch to Research Lab
+            </Command.Item>
+          </Command.Group>
+
+          <Command.Group heading={<div className="px-2 py-1 text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">Scenarios (Phase 5)</div>}>
+            <Command.Item 
+              onSelect={() => { loadScenario('normal_cruising'); setOpen(false); }}
+              className="flex items-center px-2 py-3 rounded cursor-pointer aria-selected:bg-[var(--bg-surface)] aria-selected:text-[var(--brand)] transition-colors data-[selected=true]:bg-[var(--bg-surface)] data-[selected=true]:text-[var(--brand)]"
+            >
+              <Play className="w-4 h-4 mr-3 text-emerald-400" />
+              Scenario: Normal Cruising (Open Road)
+            </Command.Item>
+            <Command.Item 
+              onSelect={() => { loadScenario('traffic_overtake'); setOpen(false); }}
+              className="flex items-center px-2 py-3 rounded cursor-pointer aria-selected:bg-[var(--bg-surface)] aria-selected:text-[var(--brand)] transition-colors data-[selected=true]:bg-[var(--bg-surface)] data-[selected=true]:text-[var(--brand)]"
+            >
+              <Play className="w-4 h-4 mr-3 text-cyan-400" />
+              Scenario: Traffic Overtake (Lane Change)
+            </Command.Item>
+            <Command.Item 
+              onSelect={() => { loadScenario('emergency_cut_in'); setOpen(false); }}
+              className="flex items-center px-2 py-3 rounded cursor-pointer aria-selected:bg-[var(--bg-surface)] aria-selected:text-[var(--brand)] transition-colors data-[selected=true]:bg-[var(--bg-surface)] data-[selected=true]:text-[var(--brand)]"
+            >
+              <Play className="w-4 h-4 mr-3 text-rose-400" />
+              Scenario: Cut-In & Brake (Safety Shield)
+            </Command.Item>
+            <Command.Item 
+              onSelect={() => { loadScenario('queue_stop_and_go'); setOpen(false); }}
+              className="flex items-center px-2 py-3 rounded cursor-pointer aria-selected:bg-[var(--bg-surface)] aria-selected:text-[var(--brand)] transition-colors data-[selected=true]:bg-[var(--bg-surface)] data-[selected=true]:text-[var(--brand)]"
+            >
+              <Play className="w-4 h-4 mr-3 text-amber-400" />
+              Scenario: Stop & Go Queue (IDM Follow)
+            </Command.Item>
+            <Command.Item 
+              onSelect={() => { togglePause(); setOpen(false); }}
+              className="flex items-center px-2 py-3 rounded cursor-pointer aria-selected:bg-[var(--bg-surface)] aria-selected:text-[var(--brand)] transition-colors data-[selected=true]:bg-[var(--bg-surface)] data-[selected=true]:text-[var(--brand)]"
+            >
+              <Pause className="w-4 h-4 mr-3 text-amber-300" />
+              Simulation: Pause / Resume [Space]
+            </Command.Item>
+            <Command.Item 
+              onSelect={() => { stepSimulation(); setOpen(false); }}
+              className="flex items-center px-2 py-3 rounded cursor-pointer aria-selected:bg-[var(--bg-surface)] aria-selected:text-[var(--brand)] transition-colors data-[selected=true]:bg-[var(--bg-surface)] data-[selected=true]:text-[var(--brand)]"
+            >
+              <StepForward className="w-4 h-4 mr-3 text-cyan-300" />
+              Simulation: Step Forward (+1 Tick)
+            </Command.Item>
+            <Command.Item 
+              onSelect={() => { resetSimulation(); setOpen(false); }}
+              className="flex items-center px-2 py-3 rounded cursor-pointer aria-selected:bg-[var(--bg-surface)] aria-selected:text-[var(--brand)] transition-colors data-[selected=true]:bg-[var(--bg-surface)] data-[selected=true]:text-[var(--brand)]"
+            >
+              <RotateCcw className="w-4 h-4 mr-3 text-white/70" />
+              Simulation: Reset Scenario
             </Command.Item>
           </Command.Group>
         </Command.List>
