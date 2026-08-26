@@ -106,25 +106,50 @@ function PlannedTrajectoryRibbon() {
   );
 }
 
-// --- 2. Waymo 360-Degree LiDAR Range Wave ---
+// --- 2. Forward Range-Sensor Sweep: tied to the REAL sensor, not a
+// decorative loop. Radius is scaled to app/services/traffic.py's actual
+// SENSOR_MAX_RANGE_M (100m forward radar/LiDAR range, not omnidirectional
+// -- this ring is a simplified 360-degree visualization of that forward
+// cone, same honesty tradeoff as every other simplified-for-legibility
+// element in this scene). When the sweep's expanding radius reaches the
+// real sensed lead vehicle's real distance, it flashes and colour-codes
+// by severity (same thresholds NpcVehicle's bounding box uses) instead of
+// pulsing decoratively regardless of whether anything was ever detected.
+const RADAR_MAX_RANGE_M = 100;
+const RADAR_SWEEP_PERIOD_S = 3.0;
+const RADAR_BASE_RING_RADIUS = 4;
+
 function LidarRadarSweep() {
   const ringRef = useRef<THREE.Mesh>(null);
+  const perception = useSimulationStore((state) => state.perception);
+  const leadDetection = perception.find((p) => p.id === 'sensed_lead_vehicle');
 
   useFrame((state) => {
-    if (ringRef.current) {
-      ringRef.current.position.x = sharedVehicleState.x;
-      ringRef.current.position.z = sharedVehicleState.z;
-      const scale = 1 + (state.clock.elapsedTime % 1.5) * 1.8;
-      const opacity = Math.max(0, 0.5 - (state.clock.elapsedTime % 1.5) * 0.3);
-      ringRef.current.scale.set(scale, scale, 1);
-      (ringRef.current.material as THREE.MeshBasicMaterial).opacity = opacity;
+    if (!ringRef.current) return;
+    ringRef.current.position.x = sharedVehicleState.x;
+    ringRef.current.position.z = sharedVehicleState.z;
+
+    const progress = (state.clock.elapsedTime % RADAR_SWEEP_PERIOD_S) / RADAR_SWEEP_PERIOD_S;
+    const radiusM = progress * RADAR_MAX_RANGE_M;
+    const scale = radiusM / RADAR_BASE_RING_RADIUS;
+    ringRef.current.scale.set(scale, scale, 1);
+
+    const material = ringRef.current.material as THREE.MeshBasicMaterial;
+    if (leadDetection && leadDetection.distance <= radiusM) {
+      const isCritical = leadDetection.distance < 15;
+      const isClose = leadDetection.distance < 25;
+      material.color.set(isCritical ? THEME.detectedCritical : isClose ? THEME.detectedWarning : THEME.detectedSafe);
+      material.opacity = 0.55;
+    } else {
+      material.color.set(THEME.brandCyan);
+      material.opacity = Math.max(0, 0.35 - progress * 0.3);
     }
   });
 
   return (
     <mesh ref={ringRef} position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-      <ringGeometry args={[4, 4.3, 32]} />
-      <meshBasicMaterial color={THEME.brandCyan} transparent opacity={0.4} side={THREE.DoubleSide} />
+      <ringGeometry args={[RADAR_BASE_RING_RADIUS, RADAR_BASE_RING_RADIUS * 1.075, 32]} />
+      <meshBasicMaterial color={THEME.brandCyan} transparent opacity={0.35} side={THREE.DoubleSide} />
     </mesh>
   );
 }
@@ -241,6 +266,17 @@ function EgoVehicle() {
   );
 }
 
+// traffic.py's VISIBILITY_WINDOW_M recycling relocates an NPC to a fresh
+// station instantly (a real, correct backend behaviour -- it's how a long
+// route stays populated). Naively lerping toward the new position instead
+// slides the car across the map at high speed, which reads as a worse
+// glitch than a clean teleport. Any single-frame jump bigger than a real
+// car could ever cover is treated as a recycle: snap instantly, then fade
+// the vehicle back in via opacity so it visibly "appears" rather than
+// sliding or popping at full opacity.
+const NPC_RECYCLE_JUMP_THRESHOLD_M = 60;
+const NPC_FADE_IN_DURATION_S = 0.5;
+
 // --- 4. Detected NPC Vehicles with Tesla Distance Badges & Color Coding ---
 function NpcVehicle({ worldPos, worldHeadingRad, isDetected, perceptionInfo }: {
   worldPos: { x: number; z: number };
@@ -249,14 +285,39 @@ function NpcVehicle({ worldPos, worldHeadingRad, isDetected, perceptionInfo }: {
   perceptionInfo?: any;
 }) {
   const groupRef = useRef<THREE.Group>(null);
+  const lastWorldPos = useRef<{ x: number; z: number } | null>(null);
+  const fadeElapsed = useRef(Infinity); // Infinity = fully faded in, not mid-fade
+  const materials = useRef<Set<THREE.Material>>(new Set());
+
+  const registerMaterial = (mat: THREE.Material | null) => {
+    if (mat) materials.current.add(mat);
+  };
 
   useFrame((_, delta) => {
-    if (groupRef.current) {
-      const alpha = Math.min(1, delta * 12);
-      groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, worldPos.x, alpha);
-      groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, worldPos.z, alpha);
-      groupRef.current.position.y = 0.4;
-      groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, -worldHeadingRad, alpha);
+    if (!groupRef.current) return;
+
+    if (lastWorldPos.current) {
+      const jump = Math.hypot(worldPos.x - lastWorldPos.current.x, worldPos.z - lastWorldPos.current.z);
+      if (jump > NPC_RECYCLE_JUMP_THRESHOLD_M) {
+        groupRef.current.position.set(worldPos.x, 0.4, worldPos.z);
+        groupRef.current.rotation.y = -worldHeadingRad;
+        fadeElapsed.current = 0;
+      }
+    }
+    lastWorldPos.current = worldPos;
+
+    const alpha = Math.min(1, delta * 12);
+    groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, worldPos.x, alpha);
+    groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, worldPos.z, alpha);
+    groupRef.current.position.y = 0.4;
+    groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, -worldHeadingRad, alpha);
+
+    if (fadeElapsed.current < NPC_FADE_IN_DURATION_S) {
+      fadeElapsed.current += delta;
+      const opacity = THREE.MathUtils.clamp(fadeElapsed.current / NPC_FADE_IN_DURATION_S, 0, 1);
+      materials.current.forEach((mat) => {
+        (mat as THREE.MeshStandardMaterial | THREE.MeshBasicMaterial).opacity = opacity;
+      });
     }
   });
 
@@ -277,39 +338,39 @@ function NpcVehicle({ worldPos, worldHeadingRad, isDetected, perceptionInfo }: {
       {/* Chassis */}
       <mesh position={[0, 0.3, 0]}>
         <boxGeometry args={[1.85, 0.5, 4.1]} />
-        <meshStandardMaterial color={THEME.npcChassis} metalness={0.5} roughness={0.4} />
+        <meshStandardMaterial ref={registerMaterial} transparent color={THEME.npcChassis} metalness={0.5} roughness={0.4} />
       </mesh>
 
       {/* Cabin */}
       <mesh position={[0, 0.7, -0.1]}>
         <boxGeometry args={[1.4, 0.4, 2.1]} />
-        <meshStandardMaterial color={THEME.npcRoof} roughness={0.2} metalness={0.8} />
+        <meshStandardMaterial ref={registerMaterial} transparent color={THEME.npcRoof} roughness={0.2} metalness={0.8} />
       </mesh>
 
       {/* Front Headlights */}
       <mesh position={[-0.65, 0.3, -2.06]}>
         <boxGeometry args={[0.28, 0.08, 0.04]} />
-        <meshBasicMaterial color="#FEF08A" />
+        <meshBasicMaterial ref={registerMaterial} transparent color="#FEF08A" />
       </mesh>
       <mesh position={[0.65, 0.3, -2.06]}>
         <boxGeometry args={[0.28, 0.08, 0.04]} />
-        <meshBasicMaterial color="#FEF08A" />
+        <meshBasicMaterial ref={registerMaterial} transparent color="#FEF08A" />
       </mesh>
 
       {/* Taillights */}
       <mesh position={[-0.65, 0.35, 2.06]}>
         <boxGeometry args={[0.3, 0.08, 0.04]} />
-        <meshBasicMaterial color={THEME.npcTaillight} />
+        <meshBasicMaterial ref={registerMaterial} transparent color={THEME.npcTaillight} />
       </mesh>
       <mesh position={[0.65, 0.35, 2.06]}>
         <boxGeometry args={[0.3, 0.08, 0.04]} />
-        <meshBasicMaterial color={THEME.npcTaillight} />
+        <meshBasicMaterial ref={registerMaterial} transparent color={THEME.npcTaillight} />
       </mesh>
 
       {/* Detected 3D Bounding Box */}
       <lineSegments position={[0, 0.55, 0]}>
         <edgesGeometry args={[new THREE.BoxGeometry(2.05, 1.3, 4.3)]} />
-        <lineBasicMaterial color={boxColor} />
+        <lineBasicMaterial ref={registerMaterial} transparent color={boxColor} />
       </lineSegments>
 
       {/* Tesla / Waymo Floating Distance Tag */}
