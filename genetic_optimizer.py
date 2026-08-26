@@ -10,7 +10,7 @@ Why exhaustive search instead of a Genetic Algorithm?
 (Filename kept as genetic_optimizer.py for historical/doc continuity; the
 algorithm itself is exhaustive search, not a GA -- see above.)
 
-Leakage note (fixed as part of task P1-1b): this search used to run its
+Leakage note (fixed as part of a previous fix): this search used to run its
 cross-validation on the FULL dataset, including rows that model_pipeline.py
 later held out as its test split -- so the feature *selection* was
 optimistically biased by data the final model's reported test accuracy was
@@ -138,7 +138,7 @@ def run_exhaustive_search():
             "5-fold stratified CV on the TRAIN split only -- the same held-out "
             "test split model_pipeline.py uses (test_size=0.2, random_state=42, "
             "stratify=y) is excluded from this search entirely. Fixes a prior "
-            "leakage bug (task P1-1b) where this search ran on the full dataset "
+            "leakage bug (a previous fix) where this search ran on the full dataset "
             "including what later became the test split."
         ),
         "all_features": features,

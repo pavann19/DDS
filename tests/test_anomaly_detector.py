@@ -3,7 +3,7 @@ Unit tests for app/services/anomaly_detector.py.
 
 Uses the real trained anomaly_model.pkl / anomaly_feature_bounds.json
 artifacts checked into the repo -- these tests exercise the actual
-deployed detector, not a mock, matching P1-3's real-pipeline-not-mock
+deployed detector, not a mock, matching the real-pipeline-not-mock
 approach to robustness testing.
 """
 import pytest
@@ -55,8 +55,8 @@ def test_normal_reading_is_not_flagged(detector):
 
 
 def test_single_feature_far_out_of_range_is_caught(detector):
-    """P1-3's core finding: Isolation Forest alone missed single-feature
-    extremes. The hard range check (added in P1-3) must catch this."""
+    """the core finding: Isolation Forest alone missed single-feature
+    extremes. The hard range check (added in ) must catch this."""
     reading = dict(_TYPICAL_READING)
     feat = "Coolant"
     bounds = detector.feature_bounds[feat]

@@ -3,9 +3,17 @@ import random
 import time
 from enum import Enum
 
-from app.services.traffic import TrafficModel, EGO_LANE_OFFSET_M
+from app.services.traffic import TrafficModel, EGO_LANE_OFFSET_M, ADJACENT_LANE_OFFSET_M
 from app.services.path_smoothing import smooth_route
-from app.services.frenet import build_frenet_frame, project_to_frenet, frenet_to_local_xz, latlng_to_local
+from app.services.frenet import (
+    build_frenet_frame,
+    project_to_frenet,
+    frenet_to_local_xz,
+    frenet_to_latlng,
+    latlng_to_local,
+)
+from app.services.car_following import idm_acceleration
+from app.services import safety_shield
 from app.services.planner import (
     LANE_CENTER_D_M,
     PLANNING_HORIZON_S,
@@ -60,20 +68,26 @@ class PhysicsEngine:
     #
     # CAVEAT: tuned on a single route, and 3 s is long for a lookahead --
     # it is compensating for the fact that this is still a crude proportional
-    # HEADING controller, which needs the extra damping. P6-2 replaces this
+    # HEADING controller, which needs the extra damping. the previous replaces this
     # steering law with proper pure-pursuit geometry and should re-tune (and
     # will likely want a shorter lookahead). Treat these as a stopgap, not a
     # result.
     LOOKAHEAD_K = 3.0            # seconds of travel to look ahead
     LOOKAHEAD_MIN_M = 20.0       # floor, so the target stays sane at low speed
     MIN_CORNER_SPEED_KMH = 8.0   # floor so a hairpin never brings the car to a dead stop
+    # Above this fraction of the current grip-limited steering range, the
+    # tracking-error speed cap starts biting (see its call site for why).
+    # 0.5 means the cap only engages once the wheel is already turned more
+    # than halfway to its limit -- ordinary lane-keeping correction stays
+    # completely unaffected; this is specifically for large heading errors.
+    TRACKING_ERROR_STEER_FRACTION_THRESHOLD = 0.25
 
-    # --- P6-2: Frenet local planner + pure-pursuit lateral control -----------
+    # --- : Frenet local planner + pure-pursuit lateral control -----------
     # Pure pursuit is proper steering GEOMETRY (it reasons about a real
     # lookahead point on a real path via delta = atan(2*L*sin(alpha)/Ld)),
     # not a proportional controller on heading error -- so it needs less
     # lookahead distance to stay damped. Swept against the real dense corner
-    # route (tests/test_physics_engine.py's _corner_route): the P6-1 proportional
+    # route (tests/test_physics_engine.py's _corner_route): the previous proportional
     # controller needed 3.0s/20m to avoid spiralling; pure pursuit tracks the
     # same route within the 15m regression bound at roughly half that lookahead.
     PP_LOOKAHEAD_K = 1.5           # seconds of travel to look ahead
@@ -85,10 +99,10 @@ class PhysicsEngine:
     LATERAL_TARGET_RATE_MPS = 1.0
 
     def __init__(self, start_lat=37.7749, start_lng=-122.4194, controller="bicycle"):
-        # controller: "bicycle" (P6-1 kinematic bicycle + jerk-limited
+        # controller: "bicycle" ( kinematic bicycle + jerk-limited
         # longitudinal control) or "legacy" (the pre-P6 point-mass lerp).
         # The legacy path is deliberately retained as the experimental CONTROL
-        # condition for the P6-6 A/B evaluation -- do not delete it.
+        # condition for the previous A/B evaluation -- do not delete it.
         self.controller = controller
 
         self.lat = start_lat
@@ -125,7 +139,7 @@ class PhysicsEngine:
         # LANE_OFFSETS convention). lateral_target_d_m is the planner's
         # currently-tracked target (rate-limited toward the winning
         # candidate); planner_candidates/chosen_d_m are the last tick's
-        # scored candidate set, surfaced for the HMI  and P6-6.
+        # scored candidate set, surfaced for the HMI  and .
         self.frenet_frame = None
         # Separate from route_index deliberately: route_index is a coarser
         # NEAREST-WAYPOINT heuristic (the coarser projection), which can advance
@@ -145,6 +159,11 @@ class PhysicsEngine:
         self.lateral_target_d_m = LANE_CENTER_D_M
         self.planner_candidates = []
         self.planner_chosen_d_m = LANE_CENTER_D_M
+        # Default "nothing to report yet" verdict -- legacy never runs the
+        # shield at all (it's the untouched P6-6 A/B control), and the
+        # bicycle controller doesn't populate a real one until its first
+        # tick with a route.
+        self.shield_verdict = safety_shield.ShieldVerdict(approved=True, risk_level=safety_shield.RISK_NONE)
         self.driving_state = DrivingState.IDLE
         # Latched once the destination is reached, and cleared only by
         # set_destination(). Without a latch the target speed is a pure
@@ -170,7 +189,7 @@ class PhysicsEngine:
         # scaled 128-203 (whatever units/baseline the source OBD-II dataset
         # used), not "meters of elevation" -- this used to start at 10.0,
         # which is wildly out-of-distribution for every tick of every
-        # simulated drive (found via task P1-3's robustness eval; the
+        # simulated drive (found via robustness eval; the
         # classifier silently tolerated it since Altitude has low feature
         # importance, but it was never a physically-meaningful input).
         # Start at the training mean so simulated telemetry is actually
@@ -200,9 +219,9 @@ class PhysicsEngine:
         Pass an empty list/None if routing failed -- navigation then falls
         back to a straight bearing to target_lat/target_lng.
 
-        P6-1d: the raw OSRM polyline is spline-smoothed and resampled to
+        : the raw OSRM polyline is spline-smoothed and resampled to
         uniform ~5 m arc length on ingestion, so the physics engine and the
-        HMI share ONE smoothed source of truth (P6-1b showed how badly
+        HMI share ONE smoothed source of truth ( showed how badly
         backend/frontend disagreement about the world behaves). Curvature
         computed downstream is consequently well-conditioned -- see
         path_smoothing.py for why raw OSRM spacing is not."""
@@ -223,6 +242,22 @@ class PhysicsEngine:
         self.lateral_target_d_m = LANE_CENTER_D_M
         self.planner_candidates = []
         self.planner_chosen_d_m = LANE_CENTER_D_M
+        self.shield_verdict = safety_shield.ShieldVerdict(approved=True, risk_level=safety_shield.RISK_NONE)
+
+        if self.controller != "legacy" and self.frenet_frame is not None:
+            # OSRM often snaps the route origin to the nearest drivable road
+            # rather than echoing the raw requested GPS coordinate. For a
+            # software-in-the-loop prototype, the simulated ego should start
+            # on that routed road, in its intended lane, with a heading that
+            # matches the route tangent. Otherwise the first few ticks can
+            # begin several metres off-lane and immediately trip traffic/TTC
+            # safety logic before the controller has a physically possible
+            # chance to recover.
+            self.current_station_m = 0.0
+            self.current_lateral_offset_m = LANE_CENTER_D_M
+            self.lat, self.lng = frenet_to_latlng(self.frenet_frame, 0.0, LANE_CENTER_D_M)
+            _, _, dir_x, dir_z = frenet_to_local_xz(self.frenet_frame, 0.0, LANE_CENTER_D_M)
+            self.heading = (math.degrees(math.atan2(dir_x, -dir_z)) + 360.0) % 360.0
 
         #  (re)spawn traffic for the new route's length. A fresh
         # TrafficModel on every set_route() call means a new destination gets
@@ -282,7 +317,7 @@ class PhysicsEngine:
             # observed during early development as the car orbiting the
             # destination and never arriving (stuck at index 17 of 29).
             # Projection is also the natural precursor to the Frenet station
-            # coordinate that P6-2 builds on.
+            # coordinate that the previous builds on.
             PROJECTION_SEARCH_WAYPOINTS = 40
             search_hi = min(len(self.route), self.route_index + PROJECTION_SEARCH_WAYPOINTS)
             nearest_idx, nearest_dist = self.route_index, float('inf')
@@ -297,7 +332,7 @@ class PhysicsEngine:
             # Steer toward a point a lookahead distance ahead of the projection
             # rather than at the nearest waypoint itself -- aiming directly at a
             # point a metre away produces violent steering demands. The lookahead
-            # grows with speed. (P6-2 replaces this with a proper pure-pursuit
+            # grows with speed. ( replaces this with a proper pure-pursuit
             # geometric law and a planned trajectory.)
             lookahead_m = max(self.LOOKAHEAD_MIN_M, self.LOOKAHEAD_K * (self.speed_kmh / 3.6))
             target_idx, accumulated = self.route_index, 0.0
@@ -360,7 +395,7 @@ class PhysicsEngine:
         # only ever accurate to within one inter-waypoint spacing because it
         # snapped to the nearest WAYPOINT rather than projecting onto the
         # route geometry itself. Computed once here (regardless of
-        # controller) since it is strictly more accurate for BOTH the P6-6
+        # controller) since it is strictly more accurate for BOTH the 
         # A/B legacy and bicycle conditions and does not touch either
         # controller's own speed/steering formulas -- it only feeds the
         # sensor/traffic station bookkeeping both already depended on.
@@ -383,7 +418,7 @@ class PhysicsEngine:
 
             if self.controller == "legacy":
                 # Pre-P6 point-mass steering: heading is nudged directly, with no
-                # steering geometry. Retained as the A/B control for P6-6.
+                # steering geometry. Retained as the A/B control for .
                 turn_rate = max(0, min(1, self.speed_kmh / 20.0)) * 45.0 * dt
                 if abs(diff) > turn_rate:
                     turn = turn_rate if diff > 0 else -turn_rate
@@ -422,8 +457,13 @@ class PhysicsEngine:
                     # driving -- the car now targets a LANE, not the road's
                     # raw polyline.
                     lead_gap_m = self.sensed_lead.gap_m if self.sensed_lead else None
+                    adjacent_lane_clear = (
+                        self.traffic.sense_lane_clear(self.current_station_m, ADJACENT_LANE_OFFSET_M)
+                        if self.traffic is not None else False
+                    )
                     self.planner_candidates = generate_candidates(
                         current_d=self.current_lateral_offset_m, lead_gap_m=lead_gap_m,
+                        adjacent_lane_clear=adjacent_lane_clear,
                     )
                     best = select_best_candidate(self.planner_candidates)
                     self.planner_chosen_d_m = best.d_target
@@ -447,7 +487,7 @@ class PhysicsEngine:
                     )
                     desired_steer = max(-steer_limit, min(steer_limit, desired_steer))
                 else:
-                    # No route: fall back to the P6-1 proportional heading
+                    # No route: fall back to the previous proportional heading
                     # controller chasing target_lat/target_lng directly (a
                     # Frenet frame needs a route to project onto).
                     desired_steer = max(-steer_limit,
@@ -476,8 +516,19 @@ class PhysicsEngine:
         # sensor is always consistent with the position actually being driven.
         if self.traffic is not None:
             self.traffic.update(dt, self.current_station_m)
+            # Real bug fix: this used to sense against a HARDCODED lane
+            # position (EGO_LANE_OFFSET_M, a constant) instead of the ego's
+            # actual real-time current_lateral_offset_m. The ego's real
+            # lateral position legitimately fluctuates (cornering, and now
+            # real lane changes -- P6-4), so once it drifted toward the far
+            # lane the sensor kept checking the near lane: it detected
+            # nothing actually in front of the car, and detected phantom
+            # traffic in a lane the car wasn't in. This is why the car
+            # could drive straight through an NPC that was visually right
+            # in front of it -- IDM never saw it, because the sensor was
+            # never told where the car actually was.
             self.sensed_lead = self.traffic.sense_lead_vehicle(
-                self.current_station_m, ego_lane_offset=EGO_LANE_OFFSET_M
+                self.current_station_m, ego_lane_offset=self.current_lateral_offset_m
             )
         else:
             self.sensed_lead = None
@@ -554,7 +605,7 @@ class PhysicsEngine:
         if self.controller == "legacy":
             # Pre-P6 heuristic: linear interpolation between two hand-picked
             # speeds based on the sharpest turn angle in the lookahead window.
-            # Retained as the A/B control for P6-6.
+            # Retained as the A/B control for .
             if corner_turn_deg > 0:
                 corner_factor = 1.0 - min(corner_turn_deg, CORNER_MAX_TURN_DEG) / CORNER_MAX_TURN_DEG
                 corner_speed_cap = CORNER_MIN_SPEED + (CRUISE_SPEED - CORNER_MIN_SPEED) * corner_factor
@@ -571,6 +622,54 @@ class PhysicsEngine:
                 if curve_cap_kmh < target_speed:
                     target_speed = curve_cap_kmh
                     self.speed_limit_reason = "lateral_accel_limit"
+
+            # Real bug fix: speed and steering were fully decoupled. Most
+            # visible right after a stop/new destination, when the car's
+            # current heading can be badly mismatched from the route's
+            # actual initial direction -- the bicycle model correctly
+            # cannot yaw while nearly stationary (yaw_rate = v*tan(delta)/L),
+            # so as it accelerated hard toward cruise speed while still
+            # pointed the wrong way, it travelled fast in the wrong
+            # direction before steering authority caught up. Measured on
+            # the real default SF route: lateral offset reached 26m (the
+            # modelled road is only 7m wide) in the first ~12s before the
+            # car reoriented and converged back to normal (1-3m) tracking
+            # for the rest of the drive -- exactly the reported "car goes
+            # off the road" behaviour, and specifically a start-of-drive
+            # issue, not a persistent one. Fixed the same way the existing
+            # curvature cap already works, just keyed off REALISED
+            # steering demand (this tick's steering_angle_rad, computed
+            # earlier in this same update()) instead of upcoming path
+            # curvature -- a real driver naturally slows while correcting
+            # a large heading error rather than flooring it.
+            # Recomputed independently rather than reusing the earlier
+            # steering block's `steer_limit` -- that variable is only ever
+            # assigned when waypoint_dist > 5.0 this tick, so relying on it
+            # here would risk a NameError on a tick where it wasn't set.
+            v_mps_for_cap = self.speed_kmh / 3.6
+            if v_mps_for_cap > 0.5:
+                current_steer_limit = min(
+                    self.MAX_STEER_RAD,
+                    math.atan(self.A_LAT_MAX_MPS2 * self.WHEELBASE_M / (v_mps_for_cap ** 2)),
+                )
+            else:
+                current_steer_limit = self.MAX_STEER_RAD
+
+            if current_steer_limit > 1e-6:
+                steer_fraction = abs(self.steering_angle_rad) / current_steer_limit
+                if steer_fraction > self.TRACKING_ERROR_STEER_FRACTION_THRESHOLD:
+                    severity = (steer_fraction - self.TRACKING_ERROR_STEER_FRACTION_THRESHOLD) / \
+                               (1.0 - self.TRACKING_ERROR_STEER_FRACTION_THRESHOLD)
+                    severity = min(1.0, severity)
+                    # Squared, not linear: a large heading error (severity
+                    # near 1) needs to cut speed hard and fast, not
+                    # gradually -- linear falloff measured 19m+ excursions
+                    # on a worst-case (180deg start-heading mismatch) route.
+                    tracking_cap_kmh = max(self.MIN_CORNER_SPEED_KMH,
+                                           CRUISE_SPEED * (1.0 - severity) ** 2)
+                    if tracking_cap_kmh < target_speed:
+                        target_speed = tracking_cap_kmh
+                        self.speed_limit_reason = "tracking_correction"
 
         if target_speed < base_target_speed and self.speed_limit_reason == "cruise":
             self.speed_limit_reason = "ai_decelerate" if ai_decision == 'Decelerate' else "approach"
@@ -590,6 +689,73 @@ class PhysicsEngine:
             v_mps = self.speed_kmh / 3.6
             target_mps = target_speed / 3.6
             desired_accel = self.SPEED_KP * (target_mps - v_mps)
+
+            # IDM car-following: this REPLACES the previous behaviour where
+            # traffic.py's sensed_lead was computed every tick, exposed to
+            # the lateral planner (P6-2), and then never touched
+            # longitudinal control at all -- the ego never actually slowed
+            # for a real gap, regardless of how close it got. Standard IDM
+            # composition: take the more conservative (smaller) of "what the
+            # cruise/AI-decision controller wants" and "what's required to
+            # not run into the sensed lead vehicle" (Treiber, Hennecke &
+            # Helbing, 2000). Legacy is untouched -- it never reads
+            # sensed_lead at all, exactly like before.
+            if self.sensed_lead is not None:
+                idm_accel = idm_acceleration(
+                    v_mps=v_mps,
+                    v0_mps=target_mps,
+                    gap_m=self.sensed_lead.gap_m,
+                    lead_speed_mps=self.sensed_lead.lead_speed_kmh / 3.6,
+                    a_max_mps2=self.A_MAX_ACCEL_MPS2,
+                )
+                if idm_accel is not None:
+                    desired_accel = min(desired_accel, idm_accel)
+                    if desired_accel < 0 and self.speed_limit_reason == "cruise":
+                        self.speed_limit_reason = "car_following"
+
+            # Safety Shield: an INDEPENDENT check of the ego's actual
+            # physical state, run AFTER the planner/IDM have already
+            # decided -- not more logic folded into their own cost
+            # functions. self.lateral_accel_mps2 here is last tick's
+            # value (this tick's isn't computed until after movement,
+            # below) -- a deliberate one-tick lag, the same acceptable
+            # staleness pattern already used elsewhere in this method for
+            # jerk/curvature-limited quantities that can't change
+            # violently tick to tick. See safety_shield.py's module
+            # docstring for why this is a separate module, not more
+            # planner logic: it re-derives risk from raw physical
+            # quantities instead of trusting the planner's own bookkeeping.
+            self.shield_verdict = safety_shield.evaluate(
+                ego_speed_mps=v_mps,
+                lateral_offset_m=self.current_lateral_offset_m,
+                lateral_accel_mps2=self.lateral_accel_mps2,
+                sensed_lead_gap_m=self.sensed_lead.gap_m if self.sensed_lead else None,
+                sensed_lead_speed_mps=(self.sensed_lead.lead_speed_kmh / 3.6) if self.sensed_lead else None,
+            )
+            if self.shield_verdict.override_action == safety_shield.OVERRIDE_EMERGENCY_BRAKE:
+                # min() composition, same principle as IDM above: the
+                # shield can only ever make the car brake HARDER than
+                # already planned, never accelerate harder -- it forces
+                # maximum physical braking regardless of what the
+                # cruise/IDM composition above computed. Appropriate here
+                # because this path is only reached for an imminent
+                # collision (TTC critical) -- stopping IS the right call.
+                desired_accel = min(desired_accel, -self.A_MAX_BRAKE_MPS2)
+                self.speed_limit_reason = "safety_shield_override"
+            elif self.shield_verdict.override_action == safety_shield.OVERRIDE_RECOVER_LOW_SPEED:
+                # Deliberately NOT a full stop -- braking all the way to
+                # zero here (road-boundary/hard-lateral-accel violations)
+                # would remove the only thing that lets the car steer back
+                # under control (yaw_rate = v*tan(delta)/L needs forward
+                # speed): a real livelock found live, where the car froze
+                # off-road, permanently re-triggering the same override
+                # forever. Proportional control toward a low but nonzero
+                # recovery floor instead, same min() composition principle.
+                recovery_target_mps = self.MIN_CORNER_SPEED_KMH / 3.6
+                recovery_accel = self.SPEED_KP * (recovery_target_mps - v_mps)
+                desired_accel = min(desired_accel, recovery_accel)
+                self.speed_limit_reason = "safety_shield_override"
+
             desired_accel = max(-self.A_MAX_BRAKE_MPS2,
                                 min(self.A_MAX_ACCEL_MPS2, desired_accel))
 
@@ -612,7 +778,7 @@ class PhysicsEngine:
         # curvature anywhere in the 60 m LOOKAHEAD, so that form spikes as soon
         # as a corner comes into view while the car is still on straight road,
         # which misreports comfort. Computing it from the realised yaw rate also
-        # makes the metric controller-agnostic, so the P6-6 A/B compares like
+        # makes the metric controller-agnostic, so the previous A/B compares like
         # with like.
         heading_delta_deg = (self.heading - heading_before_update + 180) % 360 - 180
         yaw_rate_radps = math.radians(heading_delta_deg) / dt if dt > 0 else 0.0
@@ -700,7 +866,7 @@ class PhysicsEngine:
             "driving_state": self.driving_state,
             "station_m": self.current_station_m,
             # control/diagnostic state. Surfaced for the HMI  and
-            # for the A/B evaluation in P6-6.
+            # for the A/B evaluation in .
             "controller": self.controller,
             "acceleration": self.acceleration_mps2,
             "steering_angle_rad": self.steering_angle_rad,
@@ -726,7 +892,7 @@ class PhysicsEngine:
     def get_planner_candidates(self):
         """The last tick's scored lateral candidate set , for the HMI
          to render dimmed alternatives alongside the chosen path, and
-        for the P6-6 evaluation. Separate from get_navigation_state() to keep
+        for the previous evaluation. Separate from get_navigation_state() to keep
         that payload small at 10Hz -- callers that don't need the full
         candidate breakdown (most ticks, most of the time) don't pay for it."""
         return [
@@ -734,9 +900,23 @@ class PhysicsEngine:
                 "d_target": c.d_target,
                 "cost": c.cost,
                 "is_chosen": c.d_target == self.planner_chosen_d_m,
+                "is_lane_change": c.is_lane_change,
             }
             for c in self.planner_candidates
         ]
+
+    def get_safety_shield_state(self):
+        """The last tick's independent Safety Shield verdict -- see
+        safety_shield.py's module docstring for why this is evaluated
+        separately from get_navigation_state()'s planner/IDM output rather
+        than folded into it."""
+        return {
+            "approved": self.shield_verdict.approved,
+            "risk_level": self.shield_verdict.risk_level,
+            "reasons": self.shield_verdict.reasons,
+            "override_action": self.shield_verdict.override_action,
+            "ttc_s": self.shield_verdict.ttc_s,
+        }
 
     def get_npc_states(self):
         """Full NPC state for the HMI renderer  -- a rendering

@@ -1,9 +1,9 @@
 """
-Frenet (station-lateral) frame utilities for P6-2's local planner.
+Frenet (station-lateral) frame utilities for the local planner.
 
 `current_station_m`  and its `station_distances[route_index]`
 approximation were always a stopgap -- accurate only to within one
-inter-waypoint spacing, and P6-1b's own comment said as much: "P6-2's proper
+inter-waypoint spacing, and the own comment said as much: "the proper
 Frenet frame will replace this with exact segment projection." This module
 is that replacement: an exact perpendicular projection of the ego's real
 position onto the route polyline, giving a continuous signed lateral offset
@@ -24,7 +24,7 @@ lane, right-hand traffic) and the frontend's `RoadMesh`/`SimulatedTraffic`
 `right = (dir.z, 0, -dir.x)` offset vector. If this module's `d` sign ever
 disagreed with those, the ego, the NPCs, and the road-edge rendering would
 each be using a different idea of "which side is which" -- exactly the class
-of backend/frontend disagreement P6-1b's station bug and P6-1d's smoothing
+of backend/frontend disagreement the station bug and the smoothing
 work were about.
 """
 import math
@@ -64,7 +64,7 @@ def build_frenet_frame(route: List[Tuple[float, float]]) -> Optional[FrenetFrame
     """route: the SAME smoothed waypoint list PhysicsEngine.route already
     holds (post path_smoothing.smooth_route) -- projecting against the
     smoothed route, not the raw OSRM polyline, is what gives Frenet a
-    well-conditioned (non-faceted) frame to work in, per P6-1d."""
+    well-conditioned (non-faceted) frame to work in."""
     if not route or len(route) < 2:
         return None
     origin_lat, origin_lng = route[0]
@@ -89,7 +89,7 @@ def project_to_frenet(
 
     search_start_idx/search_window bound the search to segments at or ahead
     of the caller's last known position (same windowed-search principle
-    P6-1's route_index projection already uses) -- projecting against the
+    the route_index projection already uses) -- projecting against the
     whole route every tick would be wasteful and, worse, could snap onto a
     geometrically-nearby-but-wrong part of a route that loops back on
     itself."""

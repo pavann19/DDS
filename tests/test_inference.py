@@ -52,7 +52,7 @@ def test_predict_confidence_matches_max_of_confidence_dict(pipeline):
 
 
 def test_predict_missing_fields_flagged_incomplete_input_not_silently_defaulted(pipeline):
-    """P1-3 finding: missing telemetry used to silently default to 0.0 with
+    """ finding: missing telemetry used to silently default to 0.0 with
     no anomaly flag. It must now surface as INCOMPLETE_INPUT."""
     result = pipeline.predict({})
     assert result["anomaly_result"]["type"] == "INCOMPLETE_INPUT"

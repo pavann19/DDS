@@ -1,7 +1,7 @@
 """
 Anomaly Detection Engine for DDS Autopilot
 Uses Isolation Forest to detect abnormal driving patterns, plus a hard
-per-feature range check (see task P1-3 -- Isolation Forest alone only
+per-feature range check (see a previous fix -- Isolation Forest alone only
 isolates JOINTLY unusual combinations; a single feature far outside the
 training range, with everything else normal, mostly slips through it).
 """
@@ -25,7 +25,7 @@ class AnomalyDetector:
         # A feature beyond [min - margin*range, max + margin*range] is a hard
         # range violation. margin=1.0 means "more than 1x the observed
         # train-split range beyond the min/max" -- deliberately looser than
-        # the 2x/5x/10x cases task P1-3 tested, so this doesn't fire on
+        # the 2x/5x/10x cases a previous fix tested, so this doesn't fire on
         # ordinary noisy-but-plausible readings.
         self.range_margin = range_margin
         self.model = None
@@ -163,7 +163,7 @@ class AnomalyDetector:
         input_features = input_features[self.features]
         row = input_features.iloc[0]
 
-        # --- Hard range check (task P1-3): catches single-feature extreme
+        # --- Hard range check (a previous fix): catches single-feature extreme
         # values that Isolation Forest alone mostly misses, since IF isolates
         # JOINTLY unusual combinations, not univariate outliers when every
         # other feature looks ordinary. Checked BEFORE the IF-based logic so

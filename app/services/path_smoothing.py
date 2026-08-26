@@ -15,7 +15,7 @@ all yields an enormous spurious curvature (which is why
 
 Resampling the path at uniform arc length along a smooth interpolating spline
 fixes both at the source: the ribbon becomes continuous, and curvature becomes
-a well-conditioned quantity that P6-2's Frenet planner can actually rely on.
+a well-conditioned quantity that the Frenet planner can actually rely on.
 
 Why CENTRIPETAL Catmull-Rom specifically
 ----------------------------------------

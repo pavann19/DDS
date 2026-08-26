@@ -115,7 +115,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 # resampled path) rather than the raw OSRM waypoints, so the
                 # rendered road is exactly the path the car is actually
                 # driving. Sending the raw polyline here would reintroduce the
-                # backend/frontend world-disagreement that P6-1b had to fix.
+                # backend/frontend world-disagreement that the previous had to fix.
                 "waypoints": [[lat, lng] for lat, lng in physics.route],
                 "steps": steps
             })
@@ -179,27 +179,122 @@ async def websocket_endpoint(websocket: WebSocket):
             scorer.add_reading(clean_input, current_action, result["confidence"], result["anomaly_result"])
             score_data = scorer.calculate_score()
 
-            # Prepare Payload
+            # Prepare Payload (V2 Protocol)
             current_time = time.time()
+            iso_time = datetime.fromtimestamp(current_time).isoformat() + "Z"
+            
+            # Extract NPC and perception data
+            npc_states = physics.get_npc_states()
+            traffic_data = []
+            for npc in npc_states:
+                speed = npc.get('speed_kmh', 0)
+                is_oncoming = speed < 0
+                traffic_data.append({
+                    "id": f"npc_{npc['id']}",
+                    "pose": {"x": npc.get('lane_offset', 0), "y": 0, "z": -npc.get('station_m', 0)},
+                    "yaw": 180 if is_oncoming else 0,
+                    "velocity": abs(speed) / 3.6,
+                    "acceleration": 0,
+                    "frenet": {"s": npc.get('station_m', 0), "d": npc.get('lane_offset', 0)}
+                })
+                
+            perception_data = []
+            sensed_gap = nav_state.get("sensed_lead_gap_m")
+            if sensed_gap is not None and sensed_gap < 100.0:
+                lead_speed_mps = (nav_state.get("sensed_lead_speed_kmh") or 0.0) / 3.6
+                ego_speed_mps = physics.speed_kmh / 3.6
+                rel_v = lead_speed_mps - ego_speed_mps
+                lead_station = nav_state.get("station_m", 0) + sensed_gap
+                lead_lane = nav_state.get("lateral_offset_m", 0)
+
+                perception_data.append({
+                    "id": "sensed_lead_vehicle",
+                    "type": "VEHICLE",
+                    "pose": {"x": lead_lane, "y": 0, "z": -lead_station},
+                    "yaw": 0,
+                    "velocity": lead_speed_mps,
+                    "acceleration": 0,
+                    "frenet": {"s": lead_station, "d": lead_lane},
+                    "distance": round(sensed_gap, 1),
+                    "rel_velocity": round(rel_v, 1),
+                    "confidence": 0.98
+                })
+
+            # Generate 50m Planned Trajectory Corridor (Tesla / Waymo Path of Intent)
+            curr_s = nav_state.get("station_m", 0)
+            target_d = nav_state.get("lateral_target_m", 0)
+            curr_d = nav_state.get("lateral_offset_m", 0)
+            trajectory = []
+            for i in range(12):
+                progress = i / 11.0
+                interp_d = curr_d + (target_d - curr_d) * progress
+                trajectory.append({
+                    "x": round(interp_d, 2),
+                    "y": 0.02,
+                    "z": round(-(curr_s + i * 4.5), 2)
+                })
+
+            # Regression fix: SHAP/anomaly/driver-score/planner-candidates
+            # were being computed every tick and passed to the DB-logging
+            # calls below, but never placed in the WS payload -- so they
+            # reached SQLite but no connected client, live or otherwise.
+            # Restored as additive `data` siblings (protocol_version stays
+            # "2.0"; nothing existing changes shape) so the frontend's
+            # explainability/safety panels have something real to render.
+            planner_candidates = physics.get_planner_candidates()
+            chosen_candidate = next((c for c in planner_candidates if c["is_chosen"]), None)
+            is_changing_lane = bool(chosen_candidate and chosen_candidate["is_lane_change"])
+
             payload = {
-                "timestamp": current_time,
-                "telemetry": clean_input,
-                "navigation": nav_state,
-                "predicted_decision": current_action,
-                "confidence": result["confidence_dict"],
-                "confidence_override": result["confidence_override"],
-                "shap": result["shap_result"],
-                "anomaly": result["anomaly_result"],
-                "driver_score": score_data,
-                #  server-side NPC traffic state, for the frontend to
-                # RENDER . Distinct from navigation.sensed_lead_* above,
-                # which is the ego's own sensor output used for control -- the
-                # HMI is allowed to see the full scene, the planner is not.
-                "npcs": physics.get_npc_states(),
-                #  the local planner's last scored lateral-candidate set
-                # (dimmed alternatives + the chosen path), for the HMI 
-                # to visualise and for the P6-6 evaluation.
-                "planner_candidates": physics.get_planner_candidates(),
+                "protocol_version": "2.0",
+                "simulation_id": session_id,
+                "run_id": "live",
+                "tick": predictions_count,
+                "simulation_time_s": round(predictions_count * 0.1, 2),
+                "timestamp": iso_time,
+                "coordinate_frame": "dds_world_v1",
+                "units": "SI",
+                "type": "state",
+                "data": {
+                    "ego": {
+                        "id": "ego_1",
+                        "pose": {"x": nav_state.get("lateral_offset_m", 0), "y": 0, "z": -nav_state.get("station_m", 0)},
+                        "yaw": getattr(physics, 'steering_angle_rad', 0) * 15, # subtle wheel angle
+                        "velocity": physics.speed_kmh / 3.6,
+                        "acceleration": getattr(physics, 'acceleration_mps2', 0),
+                        "frenet": {"s": nav_state.get("station_m", 0), "d": nav_state.get("lateral_offset_m", 0)},
+                        "decision": current_action,
+                        "confidence": result["confidence"],
+                        # Which physical constraint is currently binding the
+                        # speed controller -- "car_following" is the IDM
+                        # braking-for-traffic case; making this visible on
+                        # the wire is what turns "the car slowed down" into
+                        # an explainable decision rather than an unexplained
+                        # number change.
+                        "speed_limit_reason": nav_state.get("speed_limit_reason"),
+                        "target_velocity": 50.0 / 3.6,
+                        "steering_angle": getattr(physics, 'steering_angle_rad', 0),
+                        "throttle": max(0.0, getattr(physics, 'acceleration_mps2', 0) / 3.0),
+                        "brake": max(0.0, -getattr(physics, 'acceleration_mps2', 0) / 4.5)
+                    },
+                    "traffic": traffic_data,
+                    "perception": perception_data,
+                    "planner": {
+                        "trajectory": trajectory,
+                        "lookahead_point": trajectory[-1] if trajectory else {"x": 0, "y": 0, "z": 0},
+                        "lane_center": nav_state.get("lateral_offset_m", 0),
+                        "curvature": getattr(physics, 'path_curvature', 0),
+                        "candidates": planner_candidates,
+                        "is_changing_lane": is_changing_lane
+                    },
+                    "shap": result["shap_result"],
+                    "anomaly": result["anomaly_result"],
+                    "driver_score": score_data,
+                    # Independent safety layer (Safety Shield), evaluated
+                    # AFTER the planner/IDM decision -- see
+                    # app/services/safety_shield.py's module docstring.
+                    "safety_shield": physics.get_safety_shield_state()
+                }
             }
 
             if not disconnected:

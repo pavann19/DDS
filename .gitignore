@@ -38,6 +38,7 @@ THESIS_PLAN.md
 PHASE*_TASK_BOARD.md
 _context_packs/
 _evidence/
+output/
 
 # AI tool configs
 .claude/
