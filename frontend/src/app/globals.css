@@ -1,15 +1,44 @@
 @import "tailwindcss";
 
 :root {
-  --background: #050510;
-  --foreground: #e0e0e8;
+  /* DDS 2.0 Color Palette */
+  --bg-app: #0A0D12;
+  --bg-panel: #12161E;
+  --bg-surface: #1A1F2B;
+  
+  --border-subtle: #1A1F2B;
+  --border-default: #2A303C;
+  --border-focus: #3A4250;
+  
+  --text-muted: #94a3b8;
+  --text-primary: #CBD5E1;
+  --text-bright: #F8FAFC;
+  
+  /* Semantic Tokens */
+  --brand: #00E5FF;
+  --brand-muted: rgba(0, 229, 255, 0.2);
+  
+  --success: #00FF88;
+  --success-muted: rgba(0, 255, 136, 0.2);
+  
+  --warning: #FFAB00;
+  --warning-muted: rgba(255, 171, 0, 0.2);
+  
+  --critical: #FF3D00;
+  --critical-muted: rgba(255, 61, 0, 0.2);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--bg-app);
+  --color-foreground: var(--text-primary);
+  
+  --color-brand: var(--brand);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-critical: var(--critical);
+  
+  --font-sans: "Segoe UI", Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 * {
@@ -20,7 +49,7 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans);
   overflow: hidden;
 }
 
