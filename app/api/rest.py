@@ -6,6 +6,7 @@ from sqlalchemy import func, desc
 from app.core.database import get_db, SessionRecord, TelemetryLog
 from app.core.config import settings
 from app.services.inference import pipeline
+from app.services.scenario_engine import scenario_engine
 
 router = APIRouter()
 
@@ -104,3 +105,9 @@ async def get_analytics_summary(db = Depends(get_db)):
         "total_predictions": total_predictions or 0,
         "recent_anomalies": [telemetry_to_dict(log) for log in anomalies.scalars().all()]
     }
+
+@router.get("/scenarios")
+async def list_scenarios():
+    """List available driving scenarios with metadata and configuration options."""
+    return scenario_engine.list_scenarios()
+
