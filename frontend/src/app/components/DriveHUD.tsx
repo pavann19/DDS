@@ -2,7 +2,8 @@
 
 import React, { useMemo, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, Radar } from 'lucide-react';
+import { useSimulationStore } from '../../store/useSimulationStore';
 
 const EARTH_RADIUS_M = 6371000;
 
@@ -53,6 +54,9 @@ function getDistance(lat1: number, lng1: number, lat2: number, lng2: number) {
 export default function DriveHUD({ navState, route, steps, confidenceOverride }: DriveHUDProps) {
   const [nextTurn, setNextTurn] = useState<{ direction: 'left' | 'right' | 'straight', distance: number, instruction: string } | null>(null);
   const [currentTime, setCurrentTime] = useState("");
+
+  // Phase 7: the prediction stage's proactive cut-in response.
+  const cutIn = useSimulationStore((state) => state.prediction?.cut_in);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -197,6 +201,25 @@ export default function DriveHUD({ navState, route, steps, confidenceOverride }:
             </div>
           )}
           
+          {/* Phase 7: proactive cut-in slowdown */}
+          <AnimatePresence>
+            {cutIn?.active && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="mt-2 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 shadow-sm flex items-center gap-1"
+              >
+                <Radar className="w-3 h-3" />
+                Predictive Slowdown
+                <span className="ml-1 font-mono normal-case tracking-normal">
+                  P {(cutIn.probability * 100).toFixed(0)}%
+                  {cutIn.time_to_cross_s != null && ` · ${cutIn.time_to_cross_s.toFixed(1)}s`}
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* Low Confidence Warning */}
           <AnimatePresence>
             {confidenceOverride && (
