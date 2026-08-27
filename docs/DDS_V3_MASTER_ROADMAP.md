@@ -172,13 +172,21 @@ the existing 189 tests passing unchanged.
   100 Hz base, tested rate dispatch). `SimClock` wired into `PhysicsEngine`
   (fixed 20 ms substep) and `websockets.py` (single dt source for scenario +
   physics — desync removed). Wall-clock `dt` fallback retained (hybrid).
-- [ ] Relocate the ML out of the speed-target path — **deferred to Phase 7**
-  (not behavior-preserving; moves with the deep decouple).
+- [x] Relocate the ML out of the speed-target path (done in Phase 7).
+  `ai_decision` no longer influences `target_speed` or the powertrain flavour
+  (which now keys off realised acceleration) -- the XGBoost model + SHAP +
+  anomaly detection are a driver-behaviour / eco-efficiency analytics
+  channel. `test_ai_decision_has_no_effect_on_the_control_path` locks it in;
+  README claims updated.
 - [x] Split the Safety Shield into a parallel `SafetyMonitor`
   (`driver/safety_monitor.py`), veto-only. Own sensor feed / RSS / MRM is
   Phase 11.
-- [ ] Protocol v3 — **deferred to Phase 7** (breaks the v2 payload shape;
-  the heavy data it restructures for doesn't exist until Phase 7).
+- [x] Protocol v3 — done in Phase 7 (versioned reorg, one message).
+  `protocol_version` "3.0"; `data` regrouped into `channels: {pose,
+  semantic, heavy}` (heavy = surround perception + predictions, candidates
+  for on-demand/delta-encoding later). `protocol.ts`, `telemetryWorker`,
+  `useSimulationStore`, and the WS smoke test migrated; `tsc --noEmit`
+  clean.
 
 ### Gates
 - **6.5.1** ✅ All 189 existing tests pass unchanged; +36 new unit tests
@@ -186,14 +194,16 @@ the existing 189 tests passing unchanged.
 - **6.5.2** ✅ Determinism: `tests/test_determinism.py` — same seed + same
   scenario produces a bit-identical ego trajectory (and `SafetyMonitor`
   verdict sequence) across two separate runs, on the explicit-dt path.
-- **6.5.3** ⏳ `MultiRateExecutor` built and tested but not yet driving
-  `PhysicsEngine` at granular 50/20/10 Hz rates (lands with the Phase 7
-  deep split).
-- **6.5.4** ⏳ Enforced for the extracted `driver/` modules (handed no
-  `TrafficModel`/`NpcVehicle`); `PhysicsEngine` as a whole still reads
-  ground truth as the facade.
-- **6.5.5** ✅ (trivially) `tsc --noEmit` clean — no frontend change; the
-  protocol v3 migration itself is deferred to Phase 7.
+- **6.5.3** ✅ (pragmatic) `MultiRateExecutor` owns the authoritative
+  `SimClock` and drives the tick in `websockets.py` — scenario + physics
+  run as one stage registered at the stream rate. The 50/20/10 Hz
+  perception/planner/control split is wired-but-single-stage; each stage
+  gets its own registration in the Phase 11 deep decouple.
+- **6.5.4** ✅ `tests/test_driver_boundary.py` — AST-level assertion that no
+  `app/services/driver/` module names, imports, or accepts a
+  `TrafficModel` / `NpcVehicle` / `sense_lead_vehicle`. `PhysicsEngine`
+  itself still reads ground truth as the facade (Phase 11).
+- **6.5.5** ✅ `tsc --noEmit` clean after the protocol v3 migration.
 
 ---
 
@@ -203,25 +213,44 @@ the existing 189 tests passing unchanged.
 braking on merges.
 
 ### Scope
-- [ ] `app/services/prediction/forecaster.py` — 3.0s horizon @ 0.1s steps
-  (30 states/actor). Frenet polynomial extrapolation for lane-following;
-  Constant Turn Rate and Acceleration (CTRA) model for maneuvering actors.
-- [ ] `app/services/prediction/intent.py` — intent probability distribution
-  (`LANE_KEEP`/`MERGE_LEFT`/`MERGE_RIGHT`/`DECELERATING`/`STOPPING`) from
-  lateral drift velocity, lane-boundary distance, closing rate, yaw history.
-  Cut-in threshold: `P(MERGE) > 0.65` → proactive clearance ≥1.2s before
-  lane crossing.
-- [ ] `app/services/prediction/risk_field.py` — Gaussian spatiotemporal risk
-  field around forecasted centroids, covariance expanding with horizon time.
-- [ ] Frontend: predictive ribbon, 3s forecasted trails, intent color-coding.
+- [x] `app/services/prediction/forecaster.py` — 3.0s horizon @ 0.1s steps
+  (30 states/actor). CTRA (constant turn rate + accel, midpoint-integrated)
+  for maneuvering actors / no route frame; Frenet lane-following (advance
+  station at along-track speed, quintic lateral relax to nearest lane
+  centre) otherwise. `project_agent_frenet()` gives lane-relative drift.
+- [x] `app/services/prediction/intent.py` — interpretable (non-ML) scoring →
+  distribution over `LANE_KEEP`/`MERGE_LEFT`/`MERGE_RIGHT`/`DECELERATING`/
+  `STOPPING`, plus `p_cut_in` (merge component toward the ego lane) and
+  time-to-cross. Action threshold `P(cut-in) > 0.65`.
+- [x] `app/services/prediction/risk_field.py` — bounded [0,1] spatiotemporal
+  risk; oriented Gaussian per agent (wider along travel), σ grows with
+  horizon time; agents combine as probabilistic OR. `sample_along()` /
+  `max_risk()` for planner queries.
+- [x] `app/services/prediction/prediction_engine.py` (added as the
+  integration point) — per-tick orchestrator; per-track history + EMA drift
+  smoothing; emits `PredictionOutput` + a comfort-bounded proactive
+  slowdown. Wired into `PhysicsEngine.update()` off the sensor-resolved
+  track picture; `data.prediction` on the WebSocket (protocol stays "2.0").
+- [x] Frontend: `PredictedAgentRibbons` — per-agent 3 s forecast trail in
+  the 3D scene, coloured by dominant intent (green LANE_KEEP / amber MERGE /
+  yellow DECELERATING / red STOPPING); the active cut-in agent's ribbon is
+  drawn solid + thick. `PredictiveRiskTint` — a soft amber ground halo
+  under the ego while the proactive slowdown is engaged. `DriveHUD` gains a
+  "Predictive Slowdown" chip (P% + time-to-cross). `tsc --noEmit` clean;
+  verified end-to-end (10 agents, 30-pt trails, intents, cut-in on the
+  traffic_overtake scenario over a live WebSocket).
 
 ### Gates
-- **7.1** Vehicle drifting laterally at 0.4 m/s triggers `P(cut-in) > 0.70`
-  ≥1.2s before lane-divider crossing.
-- **7.2** Ego sheds speed at <1.5 m/s² on high-confidence cut-in, fully
-  preventing critical TTC triggers.
-- **7.3** Stable in-lane traffic keeps `P(cut-in) < 0.15` through curves.
-- **7.4** ≥15 new tests in `tests/test_prediction.py`; total ≥201.
+- **7.1** ✅ `estimate_intent` with sustained 0.4 m/s drift toward the ego →
+  `p_cut_in > 0.70` while `time_to_cross_s > 1.2` (test_prediction.py).
+- **7.2** ✅ Proactive slowdown caps at 1.2 m/s²; integration test shows the
+  ego eases off early and `EMERGENCY_BRAKE` never fires
+  (test_prediction_integration.py).
+- **7.3** ✅ Curve-follower has ~0 Frenet lateral drift → `p_cut_in < 0.15`;
+  stable in-lane agent stays `LANE_KEEP` dominant.
+- **7.4** ✅ 30 tests in `tests/test_prediction.py` + 4 in
+  `tests/test_prediction_integration.py` (target ≥15); suite total 259
+  (target ≥201).
 
 ---
 
@@ -403,7 +432,7 @@ behavior (tailgating, weaving, shockwaves).
 | Baseline | Phases 1-5 | — | 168 | 168/168, tsc clean |
 | 6 | Perception + EKF tracking | +21 | 189 | blind-spot detect, <2ms |
 | 6.5 | World/Driver architecture (partial; items 5/7 → P7) | +36 | 225 | 189 unchanged + bit-identical replay |
-| 7 | Trajectory prediction | +15 | 201 | ≥1.2s cut-in warning |
+| 7 | Trajectory prediction (backend done; ribbon UI pending) | +34 | 259 | ≥1.2s cut-in warning |
 | 8 | Spatiotemporal planner | +20 | 221 | mid-maneuver abort |
 | 9 | Dynamic tire physics | +16 | 237 | step-steer, ABS |
 | 10 | Semantic map + intersections | +22 | 259 | 0 stop-line overruns |

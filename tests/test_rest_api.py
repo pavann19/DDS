@@ -4,9 +4,8 @@ with the DB dependency swapped for an isolated in-memory SQLite instance
 (see tests/conftest.py) so nothing touches dds_telemetry.db.
 """
 import pytest
-from datetime import datetime
 
-from app.core.database import SessionRecord, TelemetryLog
+from app.core.database import SessionRecord, TelemetryLog, naive_utcnow
 
 
 async def _seed_session(test_db_session, session_id="test-session-1", **overrides):
@@ -14,7 +13,7 @@ async def _seed_session(test_db_session, session_id="test-session-1", **override
     async with session_maker() as db:
         record = SessionRecord(
             id=session_id,
-            start_time=datetime.utcnow(),
+            start_time=naive_utcnow(),
             total_predictions=overrides.get("total_predictions", 5),
             avg_score=overrides.get("avg_score", 87.5),
             status=overrides.get("status", "completed"),

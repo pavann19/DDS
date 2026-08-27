@@ -12,13 +12,10 @@ A real-time driving decision support system that processes OBD-II vehicle teleme
 
 DDS takes real OBD-II telemetry data (speed, RPM, fuel rate, coolant temperature, CO₂ emissions) and builds a complete driving-decision inference pipeline:
 
-- **ML Classification** — XGBoost classifier trained on real OBD-II data to infer driving decisions (Accelerate / Decelerate / Maintain Speed)
-- **Explainability** — Real-time SHAP explanations computed at 10 Hz via TreeExplainer, showing which telemetry features drive each decision
-- **Anomaly Detection** — Isolation Forest + per-feature range checks for out-of-distribution input detection
-- **Confidence-Gated Safety** — Automatic fallback to safe actions when model confidence drops below threshold
-- **Physics Simulation** — Kinematic bicycle model with jerk-limited longitudinal control, Frenet-frame local planning, and pure-pursuit lateral control
+- **Driver-Behaviour Analytics** — XGBoost classifier over ego powertrain telemetry (RPM/CO₂/coolant/fuel-rate and deltas) labelling each timestep Accelerate / Decelerate / Maintain Speed, with real-time SHAP attribution (TreeExplainer @ 10 Hz) and an Isolation-Forest + range-check OOD detector. This is an **analytics / eco-efficiency channel scored on powertrain data — it does not drive the vehicle** (ADR-001 item 5): the model reads nothing about traffic, lanes or geometry, so control is a deterministic policy instead.
+- **Autonomy Stack** — deterministic cruise policy under hard physical constraints: Frenet-frame local planning + pure-pursuit lateral control, kinematic bicycle model with jerk-limited longitudinal control, IDM car-following, curvature/tracking-error speed caps, multi-agent trajectory **prediction + intent + proactive cut-in response** (Phase 7), and an independent Safety Shield.
 - **Real Road Routing** — OSRM-powered route following with centripetal Catmull-Rom path smoothing
-- **Simulated Traffic** — Server-side NPC vehicles with forward range sensing
+- **Simulated Traffic** — Server-side NPC vehicles with forward range sensing + 360° surround perception (multi-class EKF tracking, log-odds occupancy grid)
 - **3D Visualisation** — Tesla FSD-inspired browser HMI built with React Three Fiber, featuring chase camera, HUD, road geometry, and live sensor rays
 
 ## Architecture

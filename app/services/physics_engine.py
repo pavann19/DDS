@@ -18,6 +18,7 @@ from app.services import safety_shield
 from app.services.world import advance_position, step_powertrain
 from app.services.driver import plan_lateral_offset, SafetyMonitor
 from app.services.perception.perception_engine import SurroundPerceptionEngine
+from app.services.prediction import PredictionEngine
 from app.services.planner import LANE_CENTER_D_M
 
 # Fixed simulation substep (ADR-001 item 4): 50 Hz. update() quantises its
@@ -195,6 +196,12 @@ class PhysicsEngine:
         self.surround_perception = SurroundPerceptionEngine()
         self.surround_tracks = []
 
+        # Phase 7: prediction stage (forecast + intent + risk field +
+        # proactive cut-in response). Same session lifetime as the
+        # perception engine; carries per-track history between ticks.
+        self.prediction_engine = PredictionEngine()
+        self.prediction_result = None
+
         self.speed_kmh = 0.0
         self.rpm = 800.0
         self.coolant_temp = 80.0
@@ -315,7 +322,12 @@ class PhysicsEngine:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
         return R * c
 
-    def update(self, ai_decision: str, dt: Optional[float] = None):
+    def update(self, ai_decision: str = "Maintain Speed", dt: Optional[float] = None):
+        # ai_decision: retained for call-site/telemetry compatibility only.
+        # Since ADR-001 item 5 it has NO effect on control -- the learned
+        # model is scored as driver-behaviour analytics, not a driving
+        # policy. Kept as a positional arg so existing callers/tests are
+        # unchanged.
         now = time.time()
         if dt is None:
             dt = min(now - self.last_update_time, 0.5)
@@ -487,6 +499,21 @@ class PhysicsEngine:
         else:
             self.surround_tracks = []
 
+        # Phase 7: prediction stage -- forecast each confirmed surround
+        # track, estimate its intent, and derive a comfort-bounded proactive
+        # slowdown if a cut-in toward the ego lane is developing. Runs off
+        # the sensor-resolved track picture only (never self.traffic.npcs).
+        if self.controller != "legacy" and self.surround_tracks:
+            self.prediction_result = self.prediction_engine.step(
+                clock=self.clock,
+                surround_tracks=self.surround_tracks,
+                frenet_frame=self.frenet_frame,
+                ego_lateral_offset_m=self.current_lateral_offset_m,
+                dt=dt,
+            )
+        else:
+            self.prediction_result = None
+
         if waypoint_dist > 5.0:
             target_heading = self.calculate_bearing(self.lat, self.lng, waypoint_lat, waypoint_lng)
             diff = (target_heading - self.heading + 180) % 360 - 180
@@ -612,20 +639,18 @@ class PhysicsEngine:
 
         # Speed & Engine
         #
-        # The car now has its own baseline cruise-toward-destination speed,
-        # like a real adaptive-cruise/autopilot controller, instead of speed
-        # being driven *solely* by the ML decision. Previously target_speed
-        # was ONLY set by ai_decision ('Accelerate' -> +5, 'Decelerate' ->
-        # -8, else -> hold current speed) -- since the classifier predicts
-        # "Maintain Speed" from idle-looking telemetry (RPM~800, near-zero
-        # deltas), a car starting at rest fed that exact idle reading back
-        # every tick, so it could never bootstrap out of "Maintain Speed" ->
-        # target_speed stays at the current speed (0) -> forever stationary.
-        # This is why the dashboard never actually showed the car moving.
-        # The ML decision still matters -- it now modulates the baseline
-        # (Accelerate pushes above cruise speed, Decelerate pulls below it)
-        # so it's visibly reflected in how fast the car speeds up/slows
-        # down, without being the only thing that can start motion at all.
+        # ADR-001 item 5: the learned model is OUT of the speed-target path.
+        # It reads only ego powertrain telemetry (RPM, CO2, coolant, fuel
+        # rate and deltas) -- nothing about traffic, lanes or geometry -- so
+        # it is structurally unable to be a driving policy. It is now scored
+        # as driver-behaviour / eco-efficiency analytics (see
+        # get_ml_features() and websockets.py's driver_score channel), and
+        # target_speed is set purely by the deterministic policy: a baseline
+        # cruise-toward-destination speed, then the hard physical constraints
+        # below (curvature cap, tracking-error cap, IDM car-following,
+        # Phase 7 predictive cut-in response, Safety Shield). `ai_decision`
+        # is retained on the signature for callers/telemetry but no longer
+        # influences control.
         CRUISE_SPEED = 50.0
         if dist < 10.0:
             self.has_arrived = True
@@ -642,20 +667,12 @@ class PhysicsEngine:
         else:
             base_target_speed = CRUISE_SPEED
 
-        if self.has_arrived:
-            # Arrival overrides the ML decision: an 'Accelerate' prediction must
-            # not pull the stopped car away from its destination.
-            target_speed = 0.0
-        elif ai_decision == 'Accelerate':
-            target_speed = min(base_target_speed + 15.0, 120.0)
-        elif ai_decision == 'Decelerate':
-            target_speed = max(base_target_speed - 20.0, 0.0)
-        else:
-            target_speed = base_target_speed
+        # target_speed is the deterministic baseline; every constraint below
+        # can only lower it.
+        target_speed = 0.0 if self.has_arrived else base_target_speed
 
-        # Cornering speed cap -- applied AFTER the AI decision's modulation,
-        # as a hard physical constraint (grip/turning radius), not just
-        # another input the AI's Accelerate call can override.
+        # Cornering speed cap -- a hard physical constraint (grip/turning
+        # radius).
         self.speed_limit_reason = "cruise"
         if self.controller == "legacy":
             # Pre-P6 heuristic: linear interpolation between two hand-picked
@@ -726,9 +743,6 @@ class PhysicsEngine:
                         target_speed = tracking_cap_kmh
                         self.speed_limit_reason = "tracking_correction"
 
-        if target_speed < base_target_speed and self.speed_limit_reason == "cruise":
-            self.speed_limit_reason = "ai_decelerate" if ai_decision == 'Decelerate' else "approach"
-
         if self.controller == "legacy":
             speed_diff = target_speed - self.speed_kmh
             self.speed_kmh += speed_diff * dt * 2.0
@@ -768,6 +782,20 @@ class PhysicsEngine:
                     if desired_accel < 0 and self.speed_limit_reason == "cruise":
                         self.speed_limit_reason = "car_following"
 
+            # Phase 7: proactive cut-in response. The prediction stage has
+            # already decided a comfort-bounded deceleration (< 1.5 m/s^2)
+            # is warranted because an adjacent-lane vehicle is merging toward
+            # the ego lane and is still >= 1.2 s from crossing. Same min()
+            # composition as IDM/shield -- it can only slow the ego, and it
+            # acts EARLY so the Safety Shield's TTC path never has to.
+            if (
+                self.prediction_result is not None
+                and self.prediction_result.proactive_decel_mps2 > 0.0
+            ):
+                desired_accel = min(desired_accel, -self.prediction_result.proactive_decel_mps2)
+                if self.speed_limit_reason in ("cruise", "car_following"):
+                    self.speed_limit_reason = "predictive_cut_in"
+
             # Safety Shield: an INDEPENDENT check of the ego's actual
             # physical state, run AFTER the planner/IDM have already
             # decided -- not more logic folded into their own cost
@@ -804,16 +832,29 @@ class PhysicsEngine:
                                 min(self.A_MAX_ACCEL_MPS2, desired_accel))
 
             max_accel_step = self.JERK_MAX_MPS3 * dt
+            accel_at_tick_start = self.acceleration_mps2
             accel_error = desired_accel - self.acceleration_mps2
             self.acceleration_mps2 += max(-max_accel_step, min(max_accel_step, accel_error))
 
             v_mps += self.acceleration_mps2 * dt
             if v_mps <= 0.0:
-                # Stopped: clear any wound-up braking demand so pulling away
-                # again starts from zero acceleration rather than a negative one.
+                # Stopped: bleed off any wound-up braking demand so pulling
+                # away again starts from ~zero acceleration, rather than
+                # snapping a large negative value straight to 0 (itself a
+                # jerk spike). The car is held at v = 0 meanwhile, so this
+                # ramp has no visible effect -- it only keeps the diagnostic
+                # continuous.
                 v_mps = 0.0
                 if self.acceleration_mps2 < 0.0:
-                    self.acceleration_mps2 = 0.0
+                    self.acceleration_mps2 = min(0.0, self.acceleration_mps2 + max_accel_step)
+            # Final jerk guard: whatever adjustments happened above (jerk
+            # limiter + stopped-bleed can both fire in one tick at a corner
+            # standstill), the realised acceleration must not move more than
+            # one jerk step from where it started this tick.
+            self.acceleration_mps2 = max(
+                accel_at_tick_start - max_accel_step,
+                min(accel_at_tick_start + max_accel_step, self.acceleration_mps2),
+            )
             self.speed_kmh = min(v_mps * 3.6, 160.0)
 
         # Diagnostic: the lateral acceleration ACTUALLY being experienced right
@@ -828,12 +869,22 @@ class PhysicsEngine:
         yaw_rate_radps = math.radians(heading_delta_deg) / dt if dt > 0 else 0.0
         self.lateral_accel_mps2 = abs((self.speed_kmh / 3.6) * yaw_rate_radps)
         
-        # Powertrain / emissions relaxation-integration -- extracted verbatim
-        # into world/vehicle_dynamics.py (ADR-001 item 2). Same arithmetic,
-        # same RNG call order (idle-RPM jitter then altitude drift).
+        # Powertrain / emissions relaxation-integration (world/
+        # vehicle_dynamics.py, ADR-001 item 2). Its "accelerating" flavour
+        # (RPM boost + richer fuel map) is now keyed off the REALISED
+        # longitudinal acceleration, not the learned model's guess -- item 5
+        # takes the model out of the loop, and a real throttle correlates
+        # with real acceleration, not with a classifier reading coolant
+        # temperature. This also removes the model -> telemetry -> model
+        # feedback the old wiring created.
+        powertrain_decision = (
+            "Accelerate" if self.acceleration_mps2 > 0.3
+            else "Decelerate" if self.acceleration_mps2 < -0.3
+            else "Maintain Speed"
+        )
         pt = step_powertrain(
             speed_kmh=self.speed_kmh,
-            ai_decision=ai_decision,
+            ai_decision=powertrain_decision,
             rpm=self.rpm,
             coolant_temp=self.coolant_temp,
             fuel_rate=self.fuel_rate,
@@ -954,6 +1005,8 @@ class PhysicsEngine:
         # of per-session state this method resets.
         self.surround_perception = SurroundPerceptionEngine()
         self.surround_tracks = []
+        self.prediction_engine.reset()
+        self.prediction_result = None
         # A scenario reset returns deterministic sim time to zero too.
         self.clock = SimClock(dt_s=self.clock.dt_s)
 
@@ -1008,3 +1061,33 @@ class PhysicsEngine:
         including detections behind/beside the ego the forward sensor never
         sees."""
         return self.surround_perception.get_state()
+
+    def get_prediction_state(self):
+        """Phase 7: per-agent forecasts + intent + the current proactive
+        cut-in response. ``agents`` carries a 3 s / 0.1 s forecast trail and
+        the top intents per tracked agent; ``cut_in`` summarises whether the
+        ego is currently easing off for a developing merge."""
+        pr = self.prediction_result
+        if pr is None:
+            return {"agents": [], "cut_in": {"active": False, "probability": 0.0,
+                                             "track_id": None, "time_to_cross_s": None},
+                    "proactive_decel_mps2": 0.0}
+        agents = []
+        for pred in pr.output.agents:
+            agents.append({
+                "track_id": pred.track_id,
+                "intent": [{"label": k, "p": round(p, 3)} for k, p in pred.intent],
+                "trail": [{"t": s.t_s, "x": round(s.x, 2), "z": round(s.z, 2)}
+                          for s in pred.states],
+            })
+        return {
+            "agents": agents,
+            "cut_in": {
+                "active": pr.proactive_decel_mps2 > 0.0,
+                "probability": round(pr.cut_in_probability, 3),
+                "track_id": pr.cut_in_track_id,
+                "time_to_cross_s": (round(pr.time_to_cross_s, 2)
+                                    if pr.time_to_cross_s is not None else None),
+            },
+            "proactive_decel_mps2": round(pr.proactive_decel_mps2, 2),
+        }
