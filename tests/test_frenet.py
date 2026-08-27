@@ -1,6 +1,6 @@
 """
 Unit tests for app/services/frenet.py -- the exact station/lateral
-projection P6-2 builds its planner on top of.
+projection the previous builds its planner on top of.
 """
 import math
 import pytest
@@ -54,8 +54,8 @@ def test_projection_lateral_sign_is_consistent_with_offset_application():
     """Whatever sign convention frenet_to_local_xz uses to APPLY a lateral
     offset must be the same sign project_to_frenet reports when reading one
     back -- otherwise a round trip through frenet space would flip sides,
-    which is exactly the class of frontend/backend sign disagreement P6-1b
-    and P6-1d's work was about avoiding."""
+    which is exactly the class of frontend/backend sign disagreement 
+    and the work was about avoiding."""
     route = _straight_east_route()
     frame = build_frenet_frame(route)
     s_query = frame.station[10]

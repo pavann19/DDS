@@ -53,7 +53,7 @@ function headingToDriverRight(headingDeg: number): THREE.Vector3 {
   return new THREE.Vector3(-forward.z, 0, forward.x);
 }
 
-// P6-2: the ego's lateral lane offset is now REAL backend planner state
+// : the ego's lateral lane offset is now REAL backend planner state
 // (PhysicsEngine.current_lateral_offset_m, streamed as navState.lateral_offset_m)
 // -- a genuine Frenet local planner choosing/tracking a lane-centre target,
 // not a hard-coded render constant. FALLBACK_LANE_OFFSET_M is only used
@@ -321,7 +321,7 @@ function PredictiveTrail({ navState, originLat, originLng }: { navState: NavStat
     const heading = navState.heading ?? 0;
     const driverRight = headingToDriverRight(heading);
 
-    // P6-2: real backend lateral offset (the Frenet planner's tracked
+    // : real backend lateral offset (the Frenet planner's tracked
     // target), not a hard-coded constant plus an ad-hoc client-side evasion
     // nudge -- the backend planner already accounts for a sensed lead
     // vehicle when it scores lateral candidates (planner.py), so a second,
@@ -369,7 +369,7 @@ function PredictiveTrail({ navState, originLat, originLng }: { navState: NavStat
   );
 }
 
-// Real THREE.Raycaster casts against actual scene geometry (P6-1c) --
+// Real THREE.Raycaster casts against actual scene geometry  --
 // replaces the earlier cosmetic angle-based distance formula. Rays are cast
 // in world space from the ego car's live position against the NPC meshes
 // (npcMeshRefs, populated by SimulatedTraffic's NpcCar every frame) and the
@@ -528,7 +528,7 @@ function EgoCar({ navState, action, originLat, originLng, carPositionRef }: { na
 
       const heading = navState.heading ?? 0;
 
-      // P6-2: render at the REAL backend lateral offset (the Frenet local
+      // : render at the REAL backend lateral offset (the Frenet local
       // planner's tracked target -- app/services/planner.py already scores
       // candidates against the sensed lead vehicle and road edge, so there
       // is no separate frontend "evasion" decision to make here anymore;
