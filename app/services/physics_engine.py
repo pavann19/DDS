@@ -1,5 +1,4 @@
 import math
-import random
 import time
 from enum import Enum
 from typing import Optional, List, Dict, Any
@@ -15,6 +14,7 @@ from app.services.frenet import (
 )
 from app.services.car_following import idm_acceleration
 from app.services import safety_shield
+from app.services.world import advance_position, step_powertrain
 from app.services.perception.perception_engine import SurroundPerceptionEngine
 from app.services.planner import (
     LANE_CENTER_D_M,
@@ -812,47 +812,33 @@ class PhysicsEngine:
         yaw_rate_radps = math.radians(heading_delta_deg) / dt if dt > 0 else 0.0
         self.lateral_accel_mps2 = abs((self.speed_kmh / 3.6) * yaw_rate_radps)
         
-        if self.speed_kmh < 1:
-            target_rpm = 800.0 + random.uniform(-10, 10)
-        else:
-            gear_speed = self.speed_kmh % 30.0
-            target_rpm = 1000 + (gear_speed / 30.0) * 3000
-            if ai_decision == 'Accelerate':
-                target_rpm += 500
-                
-        self.rpm += (target_rpm - self.rpm) * dt * 5.0
+        # Powertrain / emissions relaxation-integration -- extracted verbatim
+        # into world/vehicle_dynamics.py (ADR-001 item 2). Same arithmetic,
+        # same RNG call order (idle-RPM jitter then altitude drift).
+        pt = step_powertrain(
+            speed_kmh=self.speed_kmh,
+            ai_decision=ai_decision,
+            rpm=self.rpm,
+            coolant_temp=self.coolant_temp,
+            fuel_rate=self.fuel_rate,
+            co2=self.co2,
+            altitude=self.altitude,
+            dt=dt,
+        )
+        self.rpm = pt.rpm
+        self.coolant_temp = pt.coolant_temp
+        self.fuel_rate = pt.fuel_rate
+        self.co2 = pt.co2
+        self.altitude = pt.altitude
 
-        # Coolant, Fuel, CO2
-        heat_gen = (self.rpm / 4000.0) * 2.0
-        # Passive radiator/fan cooling floor so coolant doesn't run away to the clamp
-        # ceiling while idling at speed_kmh == 0 .
-        cooling = 0.5 + (self.speed_kmh / 120.0) * 1.5
-        self.coolant_temp += (heat_gen - cooling) * dt
-        self.coolant_temp = max(70.0, min(self.coolant_temp, 110.0))
-
-        load_factor = (self.rpm / 4000.0) + (1.0 if ai_decision == 'Accelerate' else 0.0)
-        target_fuel = 2.0 + load_factor * 8.0 if self.speed_kmh > 1 else 1.0
-        self.fuel_rate += (target_fuel - self.fuel_rate) * dt * 2.0
-        
-        target_co2 = self.fuel_rate * 25.0
-        self.co2 += (target_co2 - self.co2) * dt * 2.0
-        self.altitude += random.uniform(-0.1, 0.1)
-
-        # Movement
-        if self.speed_kmh > 0:
-            speed_mps = self.speed_kmh / 3.6
-            dist_moved = speed_mps * dt
-            
-            R = 6371000
-            brng = math.radians(self.heading)
-            lat1 = math.radians(self.lat)
-            lon1 = math.radians(self.lng)
-            
-            lat2 = math.asin(math.sin(lat1)*math.cos(dist_moved/R) + math.cos(lat1)*math.sin(dist_moved/R)*math.cos(brng))
-            lon2 = lon1 + math.atan2(math.sin(brng)*math.sin(dist_moved/R)*math.cos(lat1), math.cos(dist_moved/R)-math.sin(lat1)*math.sin(lat2))
-            
-            self.lat = math.degrees(lat2)
-            self.lng = math.degrees(lon2)
+        # Movement -- great-circle displacement, also extracted verbatim.
+        self.lat, self.lng = advance_position(
+            lat=self.lat,
+            lng=self.lng,
+            heading_deg=self.heading,
+            speed_kmh=self.speed_kmh,
+            dt=dt,
+        )
 
     def get_ml_features(self):
         rpm_delta = self.rpm - self.last_rpm
