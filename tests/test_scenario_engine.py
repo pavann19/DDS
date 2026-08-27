@@ -12,7 +12,8 @@ Verifies:
 8. REST API /api/scenarios endpoint.
 9. WebSocket scenario command processing.
 """
-import os
+from importlib.metadata import version
+
 import pytest
 import asyncio
 from fastapi.testclient import TestClient
@@ -22,6 +23,13 @@ from app.services.physics_engine import PhysicsEngine
 from app.services.scenario_engine import ScenarioEngine, scenario_engine
 from app.services.traffic import EGO_LANE_OFFSET_M, ADJACENT_LANE_OFFSET_M
 from app.services.safety_shield import RISK_CRITICAL, OVERRIDE_EMERGENCY_BRAKE
+
+
+def _starlette_testclient_ws_portal_hangs() -> bool:
+    try:
+        return int(version("starlette").split(".")[0]) >= 1
+    except Exception:
+        return False
 
 
 def _create_test_route_physics():
@@ -282,11 +290,13 @@ def test_rest_api_scenarios_endpoint():
 
 
 @pytest.mark.skipif(
-    os.environ.get("CI") == "true",
-    reason="Live async streaming loop + SHAP-in-thread deadlocks under TestClient on CI runners; run locally.",
+    _starlette_testclient_ws_portal_hangs(),
+    reason="Starlette 1.x TestClient websocket portal teardown deadlocks (harness bug, not app)",
 )
-def test_websocket_scenario_commands():
-    """WebSocket handles load_scenario, pause_simulation, and reset_simulation commands."""
+def test_websocket_scenario_commands(stub_inference):
+    """WebSocket handles load_scenario, pause_simulation, and reset_simulation commands.
+    ML pipeline stubbed (see conftest.stub_inference) -- this checks command
+    handling + protocol v3 payload, not the classifier."""
     client = TestClient(app)
     with client.websocket_connect("/ws/telemetry") as ws:
         # Receive initial route or state

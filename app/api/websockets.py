@@ -7,7 +7,13 @@ from typing import List
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
 
-from app.core.database import AsyncSessionLocal, SessionRecord, TelemetryLog, DriverScoreLog
+from app.core.database import (
+    AsyncSessionLocal,
+    DriverScoreLog,
+    SessionRecord,
+    TelemetryLog,
+    naive_utcnow,
+)
 from app.services.executor import MultiRateExecutor
 from app.services.inference import pipeline
 from app.services.physics_engine import PhysicsEngine
@@ -15,7 +21,7 @@ from app.services.driver_scoring import DriverScorer
 from app.services.routing import get_route
 from app.services.scenario_engine import ScenarioEngine
 from sqlalchemy.future import select
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +29,13 @@ router = APIRouter()
 
 # Telemetry stream / simulation tick rate.
 STREAM_HZ = 10.0
+
+# Safety cap on the streaming loop. None = run until the client disconnects
+# (production). Tests set a small integer so the endpoint coroutine returns
+# on its own instead of relying on the TestClient portal to tear down a
+# never-ending loop (that teardown deadlocks on some starlette/anyio
+# builds). Read at loop entry.
+MAX_STREAM_TICKS = None
 
 class SetDestinationCommand(BaseModel):
     type: str
@@ -67,7 +80,7 @@ async def finalize_stream_session(session_id: str, status: str, total_prediction
             result = await db.execute(select(SessionRecord).where(SessionRecord.id == session_id))
             session = result.scalars().first()
             if session:
-                session.end_time = datetime.utcnow()
+                session.end_time = naive_utcnow()
                 session.status = status
                 session.total_predictions = total_predictions
                 session.avg_score = total_score / max(1, total_predictions)
@@ -128,7 +141,15 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as e:
             logger.warning(f"Failed to send route to client (likely disconnected): {e}")
 
-    asyncio.create_task(fetch_and_apply_route(physics.lat, physics.lng, physics.target_lat, physics.target_lng))
+    # Tracked so the finally block can cancel + await it -- an orphan
+    # create_task() that outlives the endpoint keeps the event loop busy and
+    # (on some starlette/anyio builds) wedges the TestClient portal shutdown.
+    background_tasks: List[asyncio.Task] = []
+    background_tasks.append(
+        asyncio.create_task(
+            fetch_and_apply_route(physics.lat, physics.lng, physics.target_lat, physics.target_lng)
+        )
+    )
 
     # Background task to listen for commands
     async def listen_for_commands():
@@ -143,7 +164,9 @@ async def websocket_endpoint(websocket: WebSocket):
                         cmd = SetDestinationCommand(**payload)
                         physics.set_destination(cmd.lat, cmd.lng)
                         logger.info(f"New destination set: {cmd.lat}, {cmd.lng}")
-                        asyncio.create_task(fetch_and_apply_route(physics.lat, physics.lng, cmd.lat, cmd.lng))
+                        background_tasks.append(
+                            asyncio.create_task(fetch_and_apply_route(physics.lat, physics.lng, cmd.lat, cmd.lng))
+                        )
                     elif cmd_type == "load_scenario":
                         scenario_id = payload.get("scenario_id")
                         density = payload.get("traffic_density")
@@ -215,7 +238,11 @@ async def websocket_endpoint(websocket: WebSocket):
 
         executor.add_stage("sim", STREAM_HZ, _sim_stage)
 
+        _max_ticks = MAX_STREAM_TICKS
+
         while not disconnected:
+            if _max_ticks is not None and predictions_count >= _max_ticks:
+                break
             executor.step()
             scenario_event = _tick_ctx["event"]
             if scenario_event and not disconnected:
@@ -236,7 +263,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # Prepare Payload (V2 Protocol)
             current_time = time.time()
-            iso_time = datetime.fromtimestamp(current_time).isoformat() + "Z"
+            iso_time = datetime.fromtimestamp(current_time, tz=timezone.utc).isoformat().replace("+00:00", "Z")
             
             # Extract NPC and perception data
             npc_states = physics.get_npc_states()
@@ -423,7 +450,14 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.error(f"Error in websocket loop: {e}", exc_info=True)
     finally:
         disconnected = True
+        # Cancel AND await every spawned task so the event loop has no
+        # lingering work when this coroutine returns (an un-awaited task
+        # wedges the TestClient portal teardown on some starlette/anyio
+        # builds, and leaks a real socket read in production).
         listener_task.cancel()
+        for _t in background_tasks:
+            _t.cancel()
+        await asyncio.gather(listener_task, *background_tasks, return_exceptions=True)
         manager.disconnect(websocket)
         await persist_stream_batch(pending_logs, pending_scores)
         await finalize_stream_session(session_id, final_status, predictions_count, total_score)
