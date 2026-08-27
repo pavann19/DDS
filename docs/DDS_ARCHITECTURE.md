@@ -306,10 +306,16 @@ Sequenced so each step is independently verifiable and the suite stays green.
    (`driver/safety_monitor.py`) with veto-only authority. Own sensor feed is
    structural prep only today (shared `sensed_lead`); real separation + RSS/MRM
    is Phase 11.
-7. [ ] **Protocol v3** — *deferred to Phase 7.* A layered/delta-encoded channel
-   split is not behavior-preserving (breaks the v2 payload shape the frontend
-   and `test_websocket_smoke` depend on) and the heavy data it restructures for
-   (per-agent predictions) does not exist until Phase 7.
+7. [x] **Protocol v3** — done in Phase 7 as a *versioned reorganisation*
+   (one message, not separate transports): `protocol_version` "3.0" and the
+   flat `data` block regrouped into `channels: {pose, semantic, heavy}` —
+   `pose` = ego kinematics, `semantic` = everything needed to explain a
+   decision (incl. `driver_analytics` per item 5), `heavy` = surround
+   perception + per-agent predictions. Delta-encoding / on-demand heavy
+   channels are left for a later phase; the ADR's own analysis is that the
+   transport rework optimises for a multi-consumer constraint this project
+   does not have. `protocol.ts` + `telemetryWorker` + `useSimulationStore`
+   + the WS smoke test migrated; `tsc --noEmit` clean.
 8. [x] **Determinism test** — `tests/test_determinism.py`: same seed + same
    scenario ⇒ bit-identical ego trajectory (and `SafetyMonitor` verdict
    sequence) across two runs, on the explicit-dt path.
@@ -332,10 +338,12 @@ type-signature boundary would require rewriting them, violating the
 behavior-preserving) is sequenced into Phase 7, which needs a swappable driver
 regardless.
 
-Gate status: **6.5.1** met (189 unchanged, +36 new unit tests, 225 total).
-**6.5.2** met on the explicit-dt path (`test_determinism.py`). **6.5.3** —
-`MultiRateExecutor` exists and is tested but does not yet drive `PhysicsEngine`
-at granular rates (deferred with the deep split). **6.5.4** — enforced for the
-extracted `driver/` modules (handed no `TrafficModel`/NPC list), not yet for
-`PhysicsEngine` as a whole. **6.5.5** — `tsc --noEmit` still clean (no frontend
-change); the protocol v3 migration itself is deferred.
+Gate status (updated during Phase 7): **6.5.1** met (189 unchanged).
+**6.5.2** met on the explicit-dt path (`test_determinism.py`). **6.5.3** met
+pragmatically — `MultiRateExecutor` owns the `SimClock` and drives the tick
+in `websockets.py`; the 50/20/10 Hz split is wired-but-single-stage pending
+the Phase 11 decouple. **6.5.4** met — `test_driver_boundary.py` AST-asserts
+no `driver/` module touches `TrafficModel`/`NpcVehicle` (`PhysicsEngine`
+itself still does, as the facade). **6.5.5** met — `tsc --noEmit` clean after
+the protocol v3 reorg. Item 5 (ML relocation) and item 7 (protocol v3) were
+also completed during Phase 7 — see the Action Items list above.
