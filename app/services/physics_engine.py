@@ -10,19 +10,13 @@ from app.services.frenet import (
     project_to_frenet,
     frenet_to_local_xz,
     frenet_to_latlng,
-    latlng_to_local,
 )
 from app.services.car_following import idm_acceleration
 from app.services import safety_shield
 from app.services.world import advance_position, step_powertrain
+from app.services.driver import plan_lateral_offset
 from app.services.perception.perception_engine import SurroundPerceptionEngine
-from app.services.planner import (
-    LANE_CENTER_D_M,
-    PLANNING_HORIZON_S,
-    generate_candidates,
-    select_best_candidate,
-    pure_pursuit_steering,
-)
+from app.services.planner import LANE_CENTER_D_M
 
 class DrivingState(str, Enum):
     IDLE = "IDLE"
@@ -506,36 +500,38 @@ class PhysicsEngine:
                     # followed geometrically, which is what fixes centreline
                     # driving -- the car now targets a LANE, not the road's
                     # raw polyline.
+                    #
+                    # Extracted verbatim into driver/lateral_planner.py
+                    # (ADR-001 item 3). The lane-clear query stays here
+                    # because it touches self.traffic; the planner is handed
+                    # only the resulting bool, never the NPC list.
                     lead_gap_m = self.sensed_lead.gap_m if self.sensed_lead else None
                     adjacent_lane_clear = (
                         self.traffic.sense_lane_clear(self.current_station_m, ADJACENT_LANE_OFFSET_M)
                         if self.traffic is not None else False
                     )
-                    self.planner_candidates = generate_candidates(
-                        current_d=self.current_lateral_offset_m, lead_gap_m=lead_gap_m,
+                    lateral_plan = plan_lateral_offset(
+                        current_lateral_offset_m=self.current_lateral_offset_m,
+                        lead_gap_m=lead_gap_m,
                         adjacent_lane_clear=adjacent_lane_clear,
+                        lateral_target_d_m=self.lateral_target_d_m,
+                        frenet_frame=self.frenet_frame,
+                        current_station_m=self.current_station_m,
+                        ego_lat=self.lat,
+                        ego_lng=self.lng,
+                        heading_deg=self.heading,
+                        v_mps=v_mps,
+                        dt=dt,
+                        steer_limit_rad=steer_limit,
+                        lateral_target_rate_mps=self.LATERAL_TARGET_RATE_MPS,
+                        pp_lookahead_k=self.PP_LOOKAHEAD_K,
+                        pp_lookahead_min_m=self.PP_LOOKAHEAD_MIN_M,
+                        wheelbase_m=self.WHEELBASE_M,
                     )
-                    best = select_best_candidate(self.planner_candidates)
-                    self.planner_chosen_d_m = best.d_target
-
-                    max_d_step = self.LATERAL_TARGET_RATE_MPS * dt
-                    d_error = self.planner_chosen_d_m - self.lateral_target_d_m
-                    self.lateral_target_d_m += max(-max_d_step, min(max_d_step, d_error))
-
-                    lookahead_m = self.PP_LOOKAHEAD_K * v_mps + self.PP_LOOKAHEAD_MIN_M
-                    s_lookahead = self.current_station_m + lookahead_m
-                    look_x, look_z, _, _ = frenet_to_local_xz(
-                        self.frenet_frame, s_lookahead, self.lateral_target_d_m,
-                    )
-                    ego_x, ego_z = latlng_to_local(
-                        self.lat, self.lng, self.frenet_frame.origin_lat, self.frenet_frame.origin_lng,
-                    )
-                    dx, dz = look_x - ego_x, look_z - ego_z
-                    lookahead_dist_m = math.hypot(dx, dz)
-                    desired_steer = pure_pursuit_steering(
-                        self.heading, dx, dz, lookahead_dist_m, self.WHEELBASE_M,
-                    )
-                    desired_steer = max(-steer_limit, min(steer_limit, desired_steer))
+                    self.planner_candidates = lateral_plan.candidates
+                    self.planner_chosen_d_m = lateral_plan.chosen_d_m
+                    self.lateral_target_d_m = lateral_plan.lateral_target_d_m
+                    desired_steer = lateral_plan.desired_steer_rad
                 else:
                     # No route: fall back to the previous proportional heading
                     # controller chasing target_lat/target_lng directly (a
