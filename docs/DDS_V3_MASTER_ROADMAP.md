@@ -181,8 +181,12 @@ the existing 189 tests passing unchanged.
 - [x] Split the Safety Shield into a parallel `SafetyMonitor`
   (`driver/safety_monitor.py`), veto-only. Own sensor feed / RSS / MRM is
   Phase 11.
-- [ ] Protocol v3 — **deferred to Phase 7** (breaks the v2 payload shape;
-  the heavy data it restructures for doesn't exist until Phase 7).
+- [x] Protocol v3 — done in Phase 7 (versioned reorg, one message).
+  `protocol_version` "3.0"; `data` regrouped into `channels: {pose,
+  semantic, heavy}` (heavy = surround perception + predictions, candidates
+  for on-demand/delta-encoding later). `protocol.ts`, `telemetryWorker`,
+  `useSimulationStore`, and the WS smoke test migrated; `tsc --noEmit`
+  clean.
 
 ### Gates
 - **6.5.1** ✅ All 189 existing tests pass unchanged; +36 new unit tests
@@ -190,14 +194,16 @@ the existing 189 tests passing unchanged.
 - **6.5.2** ✅ Determinism: `tests/test_determinism.py` — same seed + same
   scenario produces a bit-identical ego trajectory (and `SafetyMonitor`
   verdict sequence) across two separate runs, on the explicit-dt path.
-- **6.5.3** ⏳ `MultiRateExecutor` built and tested but not yet driving
-  `PhysicsEngine` at granular 50/20/10 Hz rates (lands with the Phase 7
-  deep split).
-- **6.5.4** ⏳ Enforced for the extracted `driver/` modules (handed no
-  `TrafficModel`/`NpcVehicle`); `PhysicsEngine` as a whole still reads
-  ground truth as the facade.
-- **6.5.5** ✅ (trivially) `tsc --noEmit` clean — no frontend change; the
-  protocol v3 migration itself is deferred to Phase 7.
+- **6.5.3** ✅ (pragmatic) `MultiRateExecutor` owns the authoritative
+  `SimClock` and drives the tick in `websockets.py` — scenario + physics
+  run as one stage registered at the stream rate. The 50/20/10 Hz
+  perception/planner/control split is wired-but-single-stage; each stage
+  gets its own registration in the Phase 11 deep decouple.
+- **6.5.4** ✅ `tests/test_driver_boundary.py` — AST-level assertion that no
+  `app/services/driver/` module names, imports, or accepts a
+  `TrafficModel` / `NpcVehicle` / `sense_lead_vehicle`. `PhysicsEngine`
+  itself still reads ground truth as the facade (Phase 11).
+- **6.5.5** ✅ `tsc --noEmit` clean after the protocol v3 migration.
 
 ---
 

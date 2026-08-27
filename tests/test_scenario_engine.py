@@ -309,7 +309,7 @@ def test_websocket_scenario_commands():
                 assert reply["event"]["metadata"]["scenario_id"] == "emergency_cut_in"
                 scenario_confirmed = True
                 break
-            if reply.get("type") == "state" and reply.get("data", {}).get("scenario", {}).get("id") == "emergency_cut_in":
+            if reply.get("type") == "state" and reply.get("channels", {}).get("semantic", {}).get("scenario", {}).get("id") == "emergency_cut_in":
                 scenario_confirmed = True
                 break
 
@@ -322,7 +322,7 @@ def test_websocket_scenario_commands():
         for _ in range(10):
             reply = ws.receive_json()
             if reply.get("type") == "state":
-                sc = reply.get("data", {}).get("scenario", {})
+                sc = reply.get("channels", {}).get("semantic", {}).get("scenario", {})
                 if sc.get("is_paused") is True:
                     paused_confirmed = True
                     break
@@ -334,7 +334,7 @@ def test_websocket_scenario_commands():
         for _ in range(10):
             reply = ws.receive_json()
             if reply.get("type") == "state":
-                sc = reply.get("data", {}).get("scenario", {})
+                sc = reply.get("channels", {}).get("semantic", {}).get("scenario", {})
                 if sc.get("is_paused") is False:
                     resumed_confirmed = True
                     break

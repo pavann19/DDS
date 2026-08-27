@@ -13,6 +13,7 @@ import {
   ScenarioState,
   ScenarioSummary,
   SurroundTrack,
+  PredictionState,
 } from '../types/protocol';
 
 interface SimulationStore {
@@ -38,6 +39,9 @@ interface SimulationStore {
 
   // Phase 6: 360-degree surround perception -- confirmed tracks only.
   surroundPerception: SurroundTrack[];
+
+  // Phase 7: per-agent forecasts + intent + proactive cut-in response.
+  prediction: PredictionState | null;
 
   // Route: sent once per destination (app/api/websockets.py's "route"
   // message), NOT part of the 10Hz "state" tick -- [lat, lng] pairs, a
@@ -81,6 +85,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   driverScore: null,
   safetyShield: null,
   surroundPerception: [],
+  prediction: null,
 
   scenario: null,
   scenariosList: [],
@@ -113,18 +118,23 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   sendCommand: () => console.warn('sendCommand called before useTelemetry mounted'),
   setSendCommand: (fn) => set({ sendCommand: fn }),
 
-  applyDelta: (payload) => set((state) => ({
-    ego: payload.data.ego ?? state.ego,
-    traffic: payload.data.traffic ?? state.traffic,
-    perception: payload.data.perception ?? state.perception,
-    planner: payload.data.planner ?? state.planner,
-    shap: payload.data.shap ?? state.shap,
-    anomaly: payload.data.anomaly ?? state.anomaly,
-    driverScore: payload.data.driver_score ?? state.driverScore,
-    safetyShield: payload.data.safety_shield ?? state.safetyShield,
-    surroundPerception: payload.data.surround_perception ?? state.surroundPerception,
-    scenario: payload.data.scenario ?? state.scenario,
-    tick: payload.tick,
-    simulationTime: payload.simulation_time_s,
-  })),
+  applyDelta: (payload) => set((state) => {
+    // Protocol v3 layered channels (ADR-001 item 7).
+    const { pose, semantic, heavy } = payload.channels;
+    return {
+      ego: pose.ego ?? state.ego,
+      traffic: semantic.traffic ?? state.traffic,
+      perception: semantic.perception ?? state.perception,
+      planner: semantic.planner ?? state.planner,
+      shap: semantic.driver_analytics?.shap ?? state.shap,
+      anomaly: semantic.driver_analytics?.anomaly ?? state.anomaly,
+      driverScore: semantic.driver_analytics?.driver_score ?? state.driverScore,
+      safetyShield: semantic.safety_shield ?? state.safetyShield,
+      scenario: semantic.scenario ?? state.scenario,
+      surroundPerception: heavy.surround_perception ?? state.surroundPerception,
+      prediction: heavy.prediction ?? state.prediction,
+      tick: payload.tick,
+      simulationTime: payload.simulation_time_s,
+    };
+  }),
 }));

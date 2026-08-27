@@ -146,9 +146,57 @@ export interface SurroundTrack {
   dims: [number, number, number]; // [length_m, width_m, height_m]
 }
 
-// V2 Protocol Payload
+// app/services/prediction/* -- Phase 7. Per-agent 3 s / 0.1 s forecast
+// trails, intent distributions, and the current proactive cut-in response.
+// Consumes the ego's sensor-resolved SurroundTrack picture, never raw NPCs.
+export interface PredictedTrailPoint {
+  t: number; // seconds ahead
+  x: number;
+  z: number;
+}
+export interface IntentWeight {
+  label:
+    | "LANE_KEEP"
+    | "MERGE_LEFT"
+    | "MERGE_RIGHT"
+    | "DECELERATING"
+    | "STOPPING"
+    | string;
+  p: number; // 0..1
+}
+export interface AgentPredictionState {
+  track_id: number;
+  intent: IntentWeight[]; // sorted, most likely first
+  trail: PredictedTrailPoint[]; // 30 points (3.0 s @ 0.1 s)
+}
+export interface CutInState {
+  active: boolean; // the ego is currently easing off for this cut-in
+  probability: number; // 0..1, highest p_cut_in among intruding agents
+  track_id: number | null;
+  time_to_cross_s: number | null;
+}
+export interface PredictionState {
+  agents: AgentPredictionState[];
+  cut_in: CutInState;
+  proactive_decel_mps2: number; // 0.0 when no proactive action this tick
+}
+
+// ADR-001 item 5: the learned model as an analytics channel, not a policy.
+export interface DriverAnalytics {
+  decision: Decision;
+  confidence: number;
+  shap: ShapResult;
+  anomaly: AnomalyResult;
+  driver_score: DriverScore;
+}
+
+// Protocol v3 (ADR-001 item 7) -- one message, layered channels:
+//   pose      small, would-be-high-rate ego kinematics
+//   semantic  everything the HMI needs to explain a decision
+//   heavy     large payloads (surround tracks, per-agent predictions),
+//             candidates for on-demand / delta-encoding in a later phase.
 export interface TelemetryStatePayload {
-  protocol_version: "2.0";
+  protocol_version: "3.0";
   simulation_id: string;
   run_id: string;
   tick: number;
@@ -157,17 +205,22 @@ export interface TelemetryStatePayload {
   coordinate_frame: "dds_world_v1";
   units: "SI";
   type: "state";
-  data: {
-    ego: EgoState;
-    traffic: EntityState[];
-    perception: PerceptionObject[];
-    planner: PlannerState;
-    shap: ShapResult;
-    anomaly: AnomalyResult;
-    driver_score: DriverScore;
-    safety_shield: SafetyShieldState;
-    scenario?: ScenarioState;
-    surround_perception?: SurroundTrack[];
+  channels: {
+    pose: {
+      ego: EgoState;
+    };
+    semantic: {
+      traffic: EntityState[];
+      perception: PerceptionObject[];
+      planner: PlannerState;
+      safety_shield: SafetyShieldState;
+      scenario?: ScenarioState;
+      driver_analytics: DriverAnalytics;
+    };
+    heavy: {
+      surround_perception?: SurroundTrack[];
+      prediction?: PredictionState;
+    };
   };
 }
 

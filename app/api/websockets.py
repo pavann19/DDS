@@ -8,7 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
 
 from app.core.database import AsyncSessionLocal, SessionRecord, TelemetryLog, DriverScoreLog
-from app.services.interfaces import SimClock
+from app.services.executor import MultiRateExecutor
 from app.services.inference import pipeline
 from app.services.physics_engine import PhysicsEngine
 from app.services.driver_scoring import DriverScorer
@@ -20,6 +20,9 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Telemetry stream / simulation tick rate.
+STREAM_HZ = 10.0
 
 class SetDestinationCommand(BaseModel):
     type: str
@@ -196,22 +199,28 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=1011)
             return
 
-        # One fixed-step SimClock is the single source of truth for the
-        # tick dt (ADR-001 item 4). Both scenario_engine.update() and
-        # physics.update() are stepped by sim_clock.dt_s off the same
-        # instance, which structurally removes the old desync where a
-        # hardcoded 0.1 s scenario step drifted against wall-clock physics.
-        sim_clock = SimClock(dt_s=0.1)  # 10 Hz stream cadence
+        # The MultiRateExecutor owns the authoritative fixed-step SimClock
+        # (ADR-001 item 4). Scenario + physics run as ONE stage registered
+        # at the stream rate -- gate 6.5.3 is "the executor drives the
+        # tick", with the 50/20/10 Hz perception/planner/control split
+        # documented as wired-but-single-stage until the Phase 11 deep
+        # decouple gives each stage its own registration. Stepping both off
+        # executor.clock.dt_s keeps the scenario/physics desync closed.
+        executor = MultiRateExecutor(base_hz=STREAM_HZ)
+        _tick_ctx = {"event": None}
+
+        def _sim_stage(clock):
+            _tick_ctx["event"] = scenario_engine.update(physics, clock.dt_s)
+            physics.update(current_action, dt=clock.dt_s)
+
+        executor.add_stage("sim", STREAM_HZ, _sim_stage)
 
         while not disconnected:
-            sim_clock = sim_clock.advance()
-
-            scenario_event = scenario_engine.update(physics, sim_clock.dt_s)
+            executor.step()
+            scenario_event = _tick_ctx["event"]
             if scenario_event and not disconnected:
                 await websocket.send_json(scenario_event)
 
-            # Physics stepped by the exact same dt, from the same clock.
-            physics.update(current_action, dt=sim_clock.dt_s)
             nav_state = physics.get_navigation_state()
             input_dict = physics.get_ml_features()
             
@@ -291,8 +300,37 @@ async def websocket_endpoint(websocket: WebSocket):
             chosen_candidate = next((c for c in planner_candidates if c["is_chosen"]), None)
             is_changing_lane = bool(chosen_candidate and chosen_candidate["is_lane_change"])
 
+            ego_state = {
+                "id": "ego_1",
+                "pose": {"x": nav_state.get("lateral_offset_m", 0), "y": 0, "z": -nav_state.get("station_m", 0)},
+                "yaw": getattr(physics, 'steering_angle_rad', 0) * 15,  # subtle wheel angle
+                "velocity": physics.speed_kmh / 3.6,
+                "acceleration": getattr(physics, 'acceleration_mps2', 0),
+                "frenet": {"s": nav_state.get("station_m", 0), "d": nav_state.get("lateral_offset_m", 0)},
+                # Retained on ego for HMI compatibility; since ADR-001 item 5
+                # the decision does NOT drive the vehicle -- the authoritative
+                # copy lives in channels.semantic.driver_analytics.
+                "decision": current_action,
+                "confidence": result["confidence"],
+                # Which physical constraint is currently binding the speed
+                # controller -- "car_following" is IDM braking for traffic,
+                # "predictive_cut_in" is the Phase 7 proactive response, etc.
+                "speed_limit_reason": nav_state.get("speed_limit_reason"),
+                "target_velocity": 50.0 / 3.6,
+                "steering_angle": getattr(physics, 'steering_angle_rad', 0),
+                "throttle": max(0.0, getattr(physics, 'acceleration_mps2', 0) / 3.0),
+                "brake": max(0.0, -getattr(physics, 'acceleration_mps2', 0) / 4.5),
+            }
+
+            # Protocol v3 (ADR-001 item 7): one message, layered channels.
+            #   pose      -- small, would-be-high-rate ego kinematics
+            #   semantic  -- everything the HMI needs to explain a decision
+            #   heavy     -- large payloads (surround tracks, per-agent
+            #                predictions); a later phase can gate these
+            #                on-demand / delta-encode without reshaping the
+            #                envelope.
             payload = {
-                "protocol_version": "2.0",
+                "protocol_version": "3.0",
                 "simulation_id": session_id,
                 "run_id": "live",
                 "tick": predictions_count,
@@ -301,57 +339,45 @@ async def websocket_endpoint(websocket: WebSocket):
                 "coordinate_frame": "dds_world_v1",
                 "units": "SI",
                 "type": "state",
-                "data": {
-                    "ego": {
-                        "id": "ego_1",
-                        "pose": {"x": nav_state.get("lateral_offset_m", 0), "y": 0, "z": -nav_state.get("station_m", 0)},
-                        "yaw": getattr(physics, 'steering_angle_rad', 0) * 15, # subtle wheel angle
-                        "velocity": physics.speed_kmh / 3.6,
-                        "acceleration": getattr(physics, 'acceleration_mps2', 0),
-                        "frenet": {"s": nav_state.get("station_m", 0), "d": nav_state.get("lateral_offset_m", 0)},
-                        "decision": current_action,
-                        "confidence": result["confidence"],
-                        # Which physical constraint is currently binding the
-                        # speed controller -- "car_following" is the IDM
-                        # braking-for-traffic case; making this visible on
-                        # the wire is what turns "the car slowed down" into
-                        # an explainable decision rather than an unexplained
-                        # number change.
-                        "speed_limit_reason": nav_state.get("speed_limit_reason"),
-                        "target_velocity": 50.0 / 3.6,
-                        "steering_angle": getattr(physics, 'steering_angle_rad', 0),
-                        "throttle": max(0.0, getattr(physics, 'acceleration_mps2', 0) / 3.0),
-                        "brake": max(0.0, -getattr(physics, 'acceleration_mps2', 0) / 4.5)
+                "channels": {
+                    "pose": {
+                        "ego": ego_state,
                     },
-                    "traffic": traffic_data,
-                    "perception": perception_data,
-                    "planner": {
-                        "trajectory": trajectory,
-                        "lookahead_point": trajectory[-1] if trajectory else {"x": 0, "y": 0, "z": 0},
-                        "lane_center": nav_state.get("lateral_offset_m", 0),
-                        "curvature": getattr(physics, 'path_curvature', 0),
-                        "candidates": planner_candidates,
-                        "is_changing_lane": is_changing_lane
+                    "semantic": {
+                        "traffic": traffic_data,
+                        "perception": perception_data,
+                        "planner": {
+                            "trajectory": trajectory,
+                            "lookahead_point": trajectory[-1] if trajectory else {"x": 0, "y": 0, "z": 0},
+                            "lane_center": nav_state.get("lateral_offset_m", 0),
+                            "curvature": getattr(physics, 'path_curvature', 0),
+                            "candidates": planner_candidates,
+                            "is_changing_lane": is_changing_lane,
+                        },
+                        # Independent safety layer, evaluated AFTER the
+                        # planner/IDM decision -- see safety_shield.py.
+                        "safety_shield": physics.get_safety_shield_state(),
+                        "scenario": scenario_engine.get_state(),
+                        # ADR-001 item 5: the learned model as a
+                        # driver-behaviour / eco-efficiency analytics
+                        # channel, NOT a driving policy.
+                        "driver_analytics": {
+                            "decision": current_action,
+                            "confidence": result["confidence"],
+                            "shap": result["shap_result"],
+                            "anomaly": result["anomaly_result"],
+                            "driver_score": score_data,
+                        },
                     },
-                    # Phase 7: per-agent forecasts (3 s / 0.1 s trails),
-                    # intent distributions, and the current proactive
-                    # cut-in response. Additive sibling -- protocol_version
-                    # stays "2.0".
-                    "prediction": physics.get_prediction_state(),
-                    "shap": result["shap_result"],
-                    "anomaly": result["anomaly_result"],
-                    "driver_score": score_data,
-                    # Independent safety layer (Safety Shield), evaluated
-                    # AFTER the planner/IDM decision -- see
-                    # app/services/safety_shield.py's module docstring.
-                    "safety_shield": physics.get_safety_shield_state(),
-                    "scenario": scenario_engine.get_state(),
-                    # Phase 6: 360-degree surround perception -- confirmed
-                    # tracks only (tentative/coasted tracks are internal
-                    # tracker state, not yet a stable-enough signal for the
-                    # HMI to render).
-                    "surround_perception": physics.get_surround_perception_state()
-                }
+                    "heavy": {
+                        # Phase 6: 360-degree surround perception -- confirmed
+                        # tracks only.
+                        "surround_perception": physics.get_surround_perception_state(),
+                        # Phase 7: per-agent forecasts (3 s / 0.1 s trails),
+                        # intent distributions, proactive cut-in response.
+                        "prediction": physics.get_prediction_state(),
+                    },
+                },
             }
 
             if not disconnected:

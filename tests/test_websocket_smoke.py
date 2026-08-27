@@ -63,29 +63,36 @@ def test_websocket_streams_a_valid_telemetry_payload(tmp_path):
                 # V2 protocol (app/api/websockets.py) -- see
                 # frontend/src/types/protocol.ts for the TypeScript mirror
                 # of this shape.
-                assert payload["protocol_version"] == "2.0"
+                assert payload["protocol_version"] == "3.0"
                 assert payload["type"] == "state"
-                ego = payload["data"]["ego"]
-                assert ego["decision"] in {"Accelerate", "Decelerate", "Maintain Speed"}
+
+                # Protocol v3 (ADR-001 item 7): layered channels.
+                channels = payload["channels"]
+                assert set(channels) == {"pose", "semantic", "heavy"}
+
+                ego = channels["pose"]["ego"]
                 assert "confidence" in ego
                 assert "frenet" in ego
 
-                # Regression check: SHAP/anomaly/driver-score/planner-
-                # candidates were being computed every tick and logged to
-                # the DB, but never placed in the WS payload itself -- so
-                # they reached SQLite but no connected client. Restored as
-                # `data` siblings; this pins that they stay there.
-                assert "shap" in payload["data"]
-                assert "anomaly" in payload["data"]
-                assert payload["data"]["driver_score"]["rating"] in {"A+", "A", "B", "C", "D", "F"}
+                semantic = channels["semantic"]
+                # ADR-001 item 5: the learned model lives in a
+                # driver-behaviour analytics channel, not the control path.
+                analytics = semantic["driver_analytics"]
+                assert analytics["decision"] in {"Accelerate", "Decelerate", "Maintain Speed"}
+                assert "shap" in analytics
+                assert "anomaly" in analytics
+                assert analytics["driver_score"]["rating"] in {"A+", "A", "B", "C", "D", "F"}
                 # Not asserted non-empty: candidates only exist once a real
-                # route has been fetched (async, races the first tick), so
-                # an empty list on an early message is legitimate, not a bug.
-                assert isinstance(payload["data"]["planner"]["candidates"], list)
+                # route has been fetched (async, races the first tick).
+                assert isinstance(semantic["planner"]["candidates"], list)
+
+                # Phase 7 prediction rides the heavy channel.
+                assert "prediction" in channels["heavy"]
+                assert "surround_perception" in channels["heavy"]
 
                 # Safety Shield: an independent verdict, distinct from the
                 # planner/IDM decision above.
-                shield = payload["data"]["safety_shield"]
+                shield = semantic["safety_shield"]
                 assert isinstance(shield["approved"], bool)
                 assert shield["risk_level"] in {"NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
