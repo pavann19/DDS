@@ -231,8 +231,14 @@ braking on merges.
   smoothing; emits `PredictionOutput` + a comfort-bounded proactive
   slowdown. Wired into `PhysicsEngine.update()` off the sensor-resolved
   track picture; `data.prediction` on the WebSocket (protocol stays "2.0").
-- [ ] Frontend: predictive ribbon, 3s forecasted trails, intent
-  color-coding — **not started** (data is on the wire).
+- [x] Frontend: `PredictedAgentRibbons` — per-agent 3 s forecast trail in
+  the 3D scene, coloured by dominant intent (green LANE_KEEP / amber MERGE /
+  yellow DECELERATING / red STOPPING); the active cut-in agent's ribbon is
+  drawn solid + thick. `PredictiveRiskTint` — a soft amber ground halo
+  under the ego while the proactive slowdown is engaged. `DriveHUD` gains a
+  "Predictive Slowdown" chip (P% + time-to-cross). `tsc --noEmit` clean;
+  verified end-to-end (10 agents, 30-pt trails, intents, cut-in on the
+  traffic_overtake scenario over a live WebSocket).
 
 ### Gates
 - **7.1** ✅ `estimate_intent` with sustained 0.4 m/s drift toward the ego →
