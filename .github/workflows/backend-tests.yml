@@ -12,6 +12,17 @@ jobs:
     # Hard cap so a hung test fails loudly instead of burning a 6h runner
     # (a prior run sat for 1h18m on the pytest step before manual cancel).
     timeout-minutes: 25
+    env:
+      # The websocket smoke tests run the real streaming loop, which calls
+      # SHAP's TreeExplainer via asyncio.to_thread every tick. On a 2-core
+      # runner SHAP + numpy/OpenMP oversubscribe and deadlock in the worker
+      # thread, wedging the server loop so its TestClient portal never joins
+      # (observed: a 120 s per-test timeout with no progress). Pinning the
+      # math-library thread pools to 1 removes the oversubscription.
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
     steps:
       - uses: actions/checkout@v4
 
