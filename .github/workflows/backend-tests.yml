@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Hard cap so a hung test fails loudly instead of burning a 6h runner
+    # (a prior run sat for 1h18m on the pytest step before manual cancel).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -20,5 +23,34 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # The trained ML artifacts (*.pkl, optimal_features.json,
+      # anomaly_model.pkl, ...) are gitignored -- "regenerate via
+      # model_pipeline.py". CI regenerates them from the committed
+      # OBD_2_dataset.csv. Cached on the dataset + training-script hashes so
+      # this only re-runs when one of those actually changes.
+      - name: Cache ML artifacts
+        id: ml-artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            processed_telemetry.csv
+            feature_info.json
+            optimal_features.json
+            best_model.pkl
+            scaler.pkl
+            label_encoder.pkl
+            metrics.json
+            anomaly_model.pkl
+            anomaly_feature_bounds.json
+          key: ml-artifacts-${{ hashFiles('OBD_2_dataset.csv', 'data_prep.py', 'genetic_optimizer.py', 'model_pipeline.py', 'app/services/anomaly_detector.py') }}
+
+      - name: Generate ML artifacts
+        if: steps.ml-artifacts.outputs.cache-hit != 'true'
+        run: |
+          python data_prep.py
+          python genetic_optimizer.py
+          python model_pipeline.py
+          python -c "import json; from app.services.anomaly_detector import AnomalyDetector; feats = json.load(open('feature_info.json'))['features']; ok = AnomalyDetector().train(features=feats); raise SystemExit(0 if ok else 1)"
+
       - name: Run pytest with coverage
-        run: pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml -v
+        run: pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml -v --timeout=120 --timeout-method=thread
