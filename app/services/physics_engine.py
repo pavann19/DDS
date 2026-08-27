@@ -1,8 +1,10 @@
 import math
+import random
 import time
 from enum import Enum
 from typing import Optional, List, Dict, Any
 
+from app.services.interfaces import SimClock
 from app.services.traffic import TrafficModel, EGO_LANE_OFFSET_M, ADJACENT_LANE_OFFSET_M
 from app.services.path_smoothing import smooth_route
 from app.services.frenet import (
@@ -17,6 +19,13 @@ from app.services.world import advance_position, step_powertrain
 from app.services.driver import plan_lateral_offset
 from app.services.perception.perception_engine import SurroundPerceptionEngine
 from app.services.planner import LANE_CENTER_D_M
+
+# Fixed simulation substep (ADR-001 item 4): 50 Hz. update() quantises its
+# dt onto this grid to advance a deterministic SimClock; the physics
+# integration itself still uses the raw dt, so this changes reported sim
+# time only, not the trajectory.
+SIM_SUBSTEP_DT_S = 0.02
+
 
 class DrivingState(str, Enum):
     IDLE = "IDLE"
@@ -94,7 +103,8 @@ class PhysicsEngine:
     # tracked target itself doesn't jump discretely between candidates.
     LATERAL_TARGET_RATE_MPS = 1.0
 
-    def __init__(self, start_lat=37.7749, start_lng=-122.4194, controller="bicycle"):
+    def __init__(self, start_lat=37.7749, start_lng=-122.4194, controller="bicycle",
+                 seed: Optional[int] = None):
         # controller: "bicycle" ( kinematic bicycle + jerk-limited
         # longitudinal control) or "legacy" (the pre-P6 point-mass lerp).
         # The legacy path is deliberately retained as the experimental CONTROL
@@ -205,6 +215,18 @@ class PhysicsEngine:
         self.is_paused = False
         self.active_scenario = None
 
+        # Deterministic simulation time (ADR-001 item 4). update() advances
+        # this on a fixed 20 ms substep grid, quantising wall-clock jitter
+        # on the legacy dt path. The physics integration still uses the raw
+        # dt -- only sim_time_s / tick come from the clock -- so the ego
+        # trajectory is unchanged.
+        self.clock = SimClock(dt_s=SIM_SUBSTEP_DT_S)
+        # Optional seeded RNG for step_powertrain's RPM/altitude noise.
+        # None => the module-global random (behaviour unchanged for every
+        # existing caller and test); an int makes that noise reproducible,
+        # which is what the determinism gate (6.5.2) needs.
+        self._rng = random.Random(seed) if seed is not None else None
+
     def set_destination(self, lat, lng):
         self.target_lat = lat
         self.target_lng = lng
@@ -295,6 +317,10 @@ class PhysicsEngine:
         self.last_update_time = now
         if self.is_paused:
             return
+        # Deterministic sim-time advance: quantise dt onto the fixed substep
+        # grid (>=1 substep per update). Reported time/tick are then
+        # reproducible regardless of wall-clock jitter.
+        self.clock = self.clock.advance(max(1, round(dt / self.clock.dt_s)))
         # Captured before any steering/heading integration so the realised yaw
         # rate (and hence lateral acceleration) can be measured at the end.
         heading_before_update = self.heading
@@ -820,6 +846,7 @@ class PhysicsEngine:
             co2=self.co2,
             altitude=self.altitude,
             dt=dt,
+            rng=self._rng,
         )
         self.rpm = pt.rpm
         self.coolant_temp = pt.coolant_temp
@@ -875,6 +902,11 @@ class PhysicsEngine:
             "has_route": bool(self.route),
             "driving_state": self.driving_state,
             "station_m": self.current_station_m,
+            # Deterministic sim time (ADR-001 item 4) -- single source of
+            # truth for the protocol's simulation_time_s / tick, replacing
+            # the loop's own predictions_count * 0.1 arithmetic.
+            "simulation_time_s": self.clock.sim_time_s,
+            "tick": self.clock.tick,
             # control/diagnostic state. Surfaced for the HMI  and
             # for the A/B evaluation in .
             "controller": self.controller,
@@ -927,6 +959,8 @@ class PhysicsEngine:
         # of per-session state this method resets.
         self.surround_perception = SurroundPerceptionEngine()
         self.surround_tracks = []
+        # A scenario reset returns deterministic sim time to zero too.
+        self.clock = SimClock(dt_s=self.clock.dt_s)
 
         if self.frenet_frame is not None:
             self.lat, self.lng = frenet_to_latlng(self.frenet_frame, station_m, lateral_offset_m)
