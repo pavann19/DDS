@@ -8,6 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
 
 from app.core.database import AsyncSessionLocal, SessionRecord, TelemetryLog, DriverScoreLog
+from app.services.interfaces import SimClock
 from app.services.inference import pipeline
 from app.services.physics_engine import PhysicsEngine
 from app.services.driver_scoring import DriverScorer
@@ -195,17 +196,22 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=1011)
             return
 
-        SIMULATION_STEP_DT = 0.1  # 10 Hz fixed simulation step for deterministic physics-scenario synchronization
+        # One fixed-step SimClock is the single source of truth for the
+        # tick dt (ADR-001 item 4). Both scenario_engine.update() and
+        # physics.update() are stepped by sim_clock.dt_s off the same
+        # instance, which structurally removes the old desync where a
+        # hardcoded 0.1 s scenario step drifted against wall-clock physics.
+        sim_clock = SimClock(dt_s=0.1)  # 10 Hz stream cadence
 
         while not disconnected:
-            # Update Scenario Engine and Physics Engine with the identical fixed simulation dt
-            # Eliminates wall-clock inference jitter desync between tick-based milestones and vehicle kinematics
-            scenario_event = scenario_engine.update(physics, SIMULATION_STEP_DT)
+            sim_clock = sim_clock.advance()
+
+            scenario_event = scenario_engine.update(physics, sim_clock.dt_s)
             if scenario_event and not disconnected:
                 await websocket.send_json(scenario_event)
 
-            # Update Physics Engine with the exact same simulation step
-            physics.update(current_action, dt=SIMULATION_STEP_DT)
+            # Physics stepped by the exact same dt, from the same clock.
+            physics.update(current_action, dt=sim_clock.dt_s)
             nav_state = physics.get_navigation_state()
             input_dict = physics.get_ml_features()
             
