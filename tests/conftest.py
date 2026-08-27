@@ -14,6 +14,29 @@ from httpx import AsyncClient, ASGITransport
 from app.core import database as db_module
 
 
+@pytest.fixture(autouse=True)
+def _stub_live_routing(monkeypatch):
+    """Neutralise the background OSRM route fetch in the websocket
+    streaming tests.
+
+    `app/api/websockets.py` kicks off `fetch_and_apply_route()` on connect,
+    which calls the public OSRM demo API (router.project-osrm.org). On CI
+    that request stalls and, with no historical per-test timeout, hung the
+    whole job (a prior run sat 1h18m on the pytest step). Stub it to the
+    documented "routing unavailable" branch (returns None -> straight-line
+    fallback). `app/services/routing.py` itself stays covered directly by
+    tests/test_routing.py, which patches httpx, not this symbol.
+    """
+    async def _no_route(*_args, **_kwargs):
+        return None
+
+    try:
+        import app.api.websockets as _ws
+        monkeypatch.setattr(_ws, "get_route", _no_route, raising=False)
+    except Exception:
+        pass
+
+
 @pytest_asyncio.fixture
 async def test_db_session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
