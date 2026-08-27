@@ -18,6 +18,7 @@ one instead of being force-matched to the nearest (wrong) track.
 import math
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import lru_cache
 from itertools import count
 from typing import Dict, List, Optional, Tuple
 
@@ -50,6 +51,13 @@ class TrackStatus(str, Enum):
     DELETED = "DELETED"
 
 
+# dt is almost always the same value tick-to-tick (0.1s at 10Hz), so caching
+# these by dt avoids rebuilding identical 6x6 matrices every tick. Safe only
+# because nothing downstream mutates the returned array in place (every use
+# is `F @ ...` / `... + Q`, which allocates a new array) -- an in-place
+# mutation on a cached array would corrupt it for every other caller sharing
+# that dt.
+@lru_cache(maxsize=16)
 def _ca_transition_matrix(dt: float) -> np.ndarray:
     return np.array([
         [1, 0, dt, 0, 0.5 * dt * dt, 0],
@@ -61,6 +69,7 @@ def _ca_transition_matrix(dt: float) -> np.ndarray:
     ], dtype=float)
 
 
+@lru_cache(maxsize=16)
 def _ca_process_noise(dt: float, accel_var: float = PROCESS_NOISE_ACCEL_VAR) -> np.ndarray:
     """Discretized white-noise-acceleration process noise: perturbs the
     acceleration terms directly, propagated back onto position/velocity via
@@ -80,6 +89,7 @@ def _ca_process_noise(dt: float, accel_var: float = PROCESS_NOISE_ACCEL_VAR) -> 
     return Q
 
 
+_I6 = np.eye(6)
 _H = np.array([
     [1, 0, 0, 0, 0, 0],
     [0, 1, 0, 0, 0, 0],
@@ -259,8 +269,7 @@ class MultiTargetTracker:
         K = covs @ _H.T @ S_inv                                                # (M, 6, 2)
 
         new_states = states + np.einsum("mij,mj->mi", K, y)                    # (M, 6)
-        I6 = np.eye(6)
-        new_covs = (I6 - K @ _H) @ covs                                        # (M, 6, 6)
+        new_covs = (_I6 - K @ _H) @ covs                                        # (M, 6, 6)
 
         for i, (track_id, _) in enumerate(matches):
             track = self.tracks[track_id]

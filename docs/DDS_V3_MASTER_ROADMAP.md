@@ -26,10 +26,10 @@ a claim it cannot regenerate proof for.
 
 ---
 
-## Baseline (Phases 1–5, delivered and verified as of 2026-08-26)
+## Baseline (Phases 1–6, delivered and verified as of 2026-08-26)
 
-168 automated tests passing, `tsc --noEmit` clean. See `docs/DDS_V2_ROADMAP.md`
-for the full history. Summary:
+189 automated tests passing, `tsc --noEmit` clean. See `docs/DDS_V2_ROADMAP.md`
+for the full Phase 1-5 history. Summary:
 
 - **Phase 1 — Safety Shield**: independent TTC/boundary/lateral-accel
   supervisor, decoupled from the planner (`app/services/safety_shield.py`).
@@ -42,6 +42,9 @@ for the full history. Summary:
   path-planning visualization.
 - **Phase 5 — Scenario Engine**: 4 deterministic scripted scenarios, REST
   `/api/scenarios`, `ScenarioControlRoom.tsx`, 9 tests.
+- **Phase 6 — Surround Perception**: 5-frustum 360° sensor rig, multi-class
+  EKF/Kalman tracking with GNN association, log-odds occupancy grid, live
+  in the WebSocket stream as `data.surround_perception`, 21 tests.
 
 ---
 

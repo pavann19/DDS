@@ -167,14 +167,21 @@ class OccupancyGrid:
         self._occupied_mask_buffer.fill(False)
         occupied_mask = self._occupied_mask_buffer
         in_bounds_occ = (occ_rows >= 0) & (occ_rows < GRID_CELLS) & (occ_cols >= 0) & (occ_cols < GRID_CELLS)
-        occupied_mask[occ_rows[in_bounds_occ], occ_cols[in_bounds_occ]] = True
+        valid_occ_rows = occ_rows[in_bounds_occ]
+        valid_occ_cols = occ_cols[in_bounds_occ]
+        occupied_mask[valid_occ_rows, valid_occ_cols] = True
 
         in_bounds_ray = (ray_rows >= 0) & (ray_rows < GRID_CELLS) & (ray_cols >= 0) & (ray_cols < GRID_CELLS)
-        ray_rows, ray_cols = ray_rows[in_bounds_ray], ray_cols[in_bounds_ray]
-        free_mask = ~occupied_mask[ray_rows, ray_cols]
-        self._scatter_add(ray_rows[free_mask], ray_cols[free_mask], L_FREE)
+        valid_ray_rows = ray_rows[in_bounds_ray]
+        valid_ray_cols = ray_cols[in_bounds_ray]
+        free_mask = ~occupied_mask[valid_ray_rows, valid_ray_cols]
 
-        self._scatter_add(occ_rows, occ_cols, L_OCCUPIED)
+        if np.any(free_mask):
+            np.add.at(self.log_odds, (valid_ray_rows[free_mask], valid_ray_cols[free_mask]), L_FREE)
+
+        if valid_occ_rows.size > 0:
+            np.add.at(self.log_odds, (valid_occ_rows, valid_occ_cols), L_OCCUPIED)
+
         np.clip(self.log_odds, L_MIN, L_MAX, out=self.log_odds)
 
     def _scatter_add(self, rows: np.ndarray, cols: np.ndarray, delta: float) -> None:
