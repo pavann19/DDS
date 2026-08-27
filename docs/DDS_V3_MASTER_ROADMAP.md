@@ -203,25 +203,38 @@ the existing 189 tests passing unchanged.
 braking on merges.
 
 ### Scope
-- [ ] `app/services/prediction/forecaster.py` — 3.0s horizon @ 0.1s steps
-  (30 states/actor). Frenet polynomial extrapolation for lane-following;
-  Constant Turn Rate and Acceleration (CTRA) model for maneuvering actors.
-- [ ] `app/services/prediction/intent.py` — intent probability distribution
-  (`LANE_KEEP`/`MERGE_LEFT`/`MERGE_RIGHT`/`DECELERATING`/`STOPPING`) from
-  lateral drift velocity, lane-boundary distance, closing rate, yaw history.
-  Cut-in threshold: `P(MERGE) > 0.65` → proactive clearance ≥1.2s before
-  lane crossing.
-- [ ] `app/services/prediction/risk_field.py` — Gaussian spatiotemporal risk
-  field around forecasted centroids, covariance expanding with horizon time.
-- [ ] Frontend: predictive ribbon, 3s forecasted trails, intent color-coding.
+- [x] `app/services/prediction/forecaster.py` — 3.0s horizon @ 0.1s steps
+  (30 states/actor). CTRA (constant turn rate + accel, midpoint-integrated)
+  for maneuvering actors / no route frame; Frenet lane-following (advance
+  station at along-track speed, quintic lateral relax to nearest lane
+  centre) otherwise. `project_agent_frenet()` gives lane-relative drift.
+- [x] `app/services/prediction/intent.py` — interpretable (non-ML) scoring →
+  distribution over `LANE_KEEP`/`MERGE_LEFT`/`MERGE_RIGHT`/`DECELERATING`/
+  `STOPPING`, plus `p_cut_in` (merge component toward the ego lane) and
+  time-to-cross. Action threshold `P(cut-in) > 0.65`.
+- [x] `app/services/prediction/risk_field.py` — bounded [0,1] spatiotemporal
+  risk; oriented Gaussian per agent (wider along travel), σ grows with
+  horizon time; agents combine as probabilistic OR. `sample_along()` /
+  `max_risk()` for planner queries.
+- [x] `app/services/prediction/prediction_engine.py` (added as the
+  integration point) — per-tick orchestrator; per-track history + EMA drift
+  smoothing; emits `PredictionOutput` + a comfort-bounded proactive
+  slowdown. Wired into `PhysicsEngine.update()` off the sensor-resolved
+  track picture; `data.prediction` on the WebSocket (protocol stays "2.0").
+- [ ] Frontend: predictive ribbon, 3s forecasted trails, intent
+  color-coding — **not started** (data is on the wire).
 
 ### Gates
-- **7.1** Vehicle drifting laterally at 0.4 m/s triggers `P(cut-in) > 0.70`
-  ≥1.2s before lane-divider crossing.
-- **7.2** Ego sheds speed at <1.5 m/s² on high-confidence cut-in, fully
-  preventing critical TTC triggers.
-- **7.3** Stable in-lane traffic keeps `P(cut-in) < 0.15` through curves.
-- **7.4** ≥15 new tests in `tests/test_prediction.py`; total ≥201.
+- **7.1** ✅ `estimate_intent` with sustained 0.4 m/s drift toward the ego →
+  `p_cut_in > 0.70` while `time_to_cross_s > 1.2` (test_prediction.py).
+- **7.2** ✅ Proactive slowdown caps at 1.2 m/s²; integration test shows the
+  ego eases off early and `EMERGENCY_BRAKE` never fires
+  (test_prediction_integration.py).
+- **7.3** ✅ Curve-follower has ~0 Frenet lateral drift → `p_cut_in < 0.15`;
+  stable in-lane agent stays `LANE_KEEP` dominant.
+- **7.4** ✅ 30 tests in `tests/test_prediction.py` + 4 in
+  `tests/test_prediction_integration.py` (target ≥15); suite total 259
+  (target ≥201).
 
 ---
 
@@ -403,7 +416,7 @@ behavior (tailgating, weaving, shockwaves).
 | Baseline | Phases 1-5 | — | 168 | 168/168, tsc clean |
 | 6 | Perception + EKF tracking | +21 | 189 | blind-spot detect, <2ms |
 | 6.5 | World/Driver architecture (partial; items 5/7 → P7) | +36 | 225 | 189 unchanged + bit-identical replay |
-| 7 | Trajectory prediction | +15 | 201 | ≥1.2s cut-in warning |
+| 7 | Trajectory prediction (backend done; ribbon UI pending) | +34 | 259 | ≥1.2s cut-in warning |
 | 8 | Spatiotemporal planner | +20 | 221 | mid-maneuver abort |
 | 9 | Dynamic tire physics | +16 | 237 | step-steer, ABS |
 | 10 | Semantic map + intersections | +22 | 259 | 0 stop-line overruns |
