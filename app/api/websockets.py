@@ -333,6 +333,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         "candidates": planner_candidates,
                         "is_changing_lane": is_changing_lane
                     },
+                    # Phase 7: per-agent forecasts (3 s / 0.1 s trails),
+                    # intent distributions, and the current proactive
+                    # cut-in response. Additive sibling -- protocol_version
+                    # stays "2.0".
+                    "prediction": physics.get_prediction_state(),
                     "shap": result["shap_result"],
                     "anomaly": result["anomaly_result"],
                     "driver_score": score_data,

@@ -18,6 +18,7 @@ from app.services import safety_shield
 from app.services.world import advance_position, step_powertrain
 from app.services.driver import plan_lateral_offset, SafetyMonitor
 from app.services.perception.perception_engine import SurroundPerceptionEngine
+from app.services.prediction import PredictionEngine
 from app.services.planner import LANE_CENTER_D_M
 
 # Fixed simulation substep (ADR-001 item 4): 50 Hz. update() quantises its
@@ -194,6 +195,12 @@ class PhysicsEngine:
         # lifetime as self.traffic.
         self.surround_perception = SurroundPerceptionEngine()
         self.surround_tracks = []
+
+        # Phase 7: prediction stage (forecast + intent + risk field +
+        # proactive cut-in response). Same session lifetime as the
+        # perception engine; carries per-track history between ticks.
+        self.prediction_engine = PredictionEngine()
+        self.prediction_result = None
 
         self.speed_kmh = 0.0
         self.rpm = 800.0
@@ -487,6 +494,21 @@ class PhysicsEngine:
         else:
             self.surround_tracks = []
 
+        # Phase 7: prediction stage -- forecast each confirmed surround
+        # track, estimate its intent, and derive a comfort-bounded proactive
+        # slowdown if a cut-in toward the ego lane is developing. Runs off
+        # the sensor-resolved track picture only (never self.traffic.npcs).
+        if self.controller != "legacy" and self.surround_tracks:
+            self.prediction_result = self.prediction_engine.step(
+                clock=self.clock,
+                surround_tracks=self.surround_tracks,
+                frenet_frame=self.frenet_frame,
+                ego_lateral_offset_m=self.current_lateral_offset_m,
+                dt=dt,
+            )
+        else:
+            self.prediction_result = None
+
         if waypoint_dist > 5.0:
             target_heading = self.calculate_bearing(self.lat, self.lng, waypoint_lat, waypoint_lng)
             diff = (target_heading - self.heading + 180) % 360 - 180
@@ -768,6 +790,20 @@ class PhysicsEngine:
                     if desired_accel < 0 and self.speed_limit_reason == "cruise":
                         self.speed_limit_reason = "car_following"
 
+            # Phase 7: proactive cut-in response. The prediction stage has
+            # already decided a comfort-bounded deceleration (< 1.5 m/s^2)
+            # is warranted because an adjacent-lane vehicle is merging toward
+            # the ego lane and is still >= 1.2 s from crossing. Same min()
+            # composition as IDM/shield -- it can only slow the ego, and it
+            # acts EARLY so the Safety Shield's TTC path never has to.
+            if (
+                self.prediction_result is not None
+                and self.prediction_result.proactive_decel_mps2 > 0.0
+            ):
+                desired_accel = min(desired_accel, -self.prediction_result.proactive_decel_mps2)
+                if self.speed_limit_reason in ("cruise", "car_following"):
+                    self.speed_limit_reason = "predictive_cut_in"
+
             # Safety Shield: an INDEPENDENT check of the ego's actual
             # physical state, run AFTER the planner/IDM have already
             # decided -- not more logic folded into their own cost
@@ -809,11 +845,15 @@ class PhysicsEngine:
 
             v_mps += self.acceleration_mps2 * dt
             if v_mps <= 0.0:
-                # Stopped: clear any wound-up braking demand so pulling away
-                # again starts from zero acceleration rather than a negative one.
+                # Stopped: bleed off any wound-up braking demand so pulling
+                # away again starts from ~zero acceleration. Ease it toward 0
+                # within the jerk limit rather than snapping (a snap from a
+                # large negative value is itself a jerk spike -- and the car
+                # is held at v = 0 meanwhile, so the ramp has no visible
+                # effect, it only keeps the diagnostic continuous).
                 v_mps = 0.0
                 if self.acceleration_mps2 < 0.0:
-                    self.acceleration_mps2 = 0.0
+                    self.acceleration_mps2 = min(0.0, self.acceleration_mps2 + max_accel_step)
             self.speed_kmh = min(v_mps * 3.6, 160.0)
 
         # Diagnostic: the lateral acceleration ACTUALLY being experienced right
@@ -954,6 +994,8 @@ class PhysicsEngine:
         # of per-session state this method resets.
         self.surround_perception = SurroundPerceptionEngine()
         self.surround_tracks = []
+        self.prediction_engine.reset()
+        self.prediction_result = None
         # A scenario reset returns deterministic sim time to zero too.
         self.clock = SimClock(dt_s=self.clock.dt_s)
 
@@ -1008,3 +1050,33 @@ class PhysicsEngine:
         including detections behind/beside the ego the forward sensor never
         sees."""
         return self.surround_perception.get_state()
+
+    def get_prediction_state(self):
+        """Phase 7: per-agent forecasts + intent + the current proactive
+        cut-in response. ``agents`` carries a 3 s / 0.1 s forecast trail and
+        the top intents per tracked agent; ``cut_in`` summarises whether the
+        ego is currently easing off for a developing merge."""
+        pr = self.prediction_result
+        if pr is None:
+            return {"agents": [], "cut_in": {"active": False, "probability": 0.0,
+                                             "track_id": None, "time_to_cross_s": None},
+                    "proactive_decel_mps2": 0.0}
+        agents = []
+        for pred in pr.output.agents:
+            agents.append({
+                "track_id": pred.track_id,
+                "intent": [{"label": k, "p": round(p, 3)} for k, p in pred.intent],
+                "trail": [{"t": s.t_s, "x": round(s.x, 2), "z": round(s.z, 2)}
+                          for s in pred.states],
+            })
+        return {
+            "agents": agents,
+            "cut_in": {
+                "active": pr.proactive_decel_mps2 > 0.0,
+                "probability": round(pr.cut_in_probability, 3),
+                "track_id": pr.cut_in_track_id,
+                "time_to_cross_s": (round(pr.time_to_cross_s, 2)
+                                    if pr.time_to_cross_s is not None else None),
+            },
+            "proactive_decel_mps2": round(pr.proactive_decel_mps2, 2),
+        }
