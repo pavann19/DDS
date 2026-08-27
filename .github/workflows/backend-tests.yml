@@ -11,14 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     # Hard cap so a hung test fails loudly instead of burning a 6h runner
     # (a prior run sat for 1h18m on the pytest step before manual cancel).
-    timeout-minutes: 25
+    timeout-minutes: 20
     env:
-      # The websocket smoke tests run the real streaming loop, which calls
-      # SHAP's TreeExplainer via asyncio.to_thread every tick. On a 2-core
-      # runner SHAP + numpy/OpenMP oversubscribe and deadlock in the worker
-      # thread, wedging the server loop so its TestClient portal never joins
-      # (observed: a 120 s per-test timeout with no progress). Pinning the
-      # math-library thread pools to 1 removes the oversubscription.
+      # SHAP's TreeExplainer + numpy/OpenMP oversubscribe and can deadlock
+      # in a worker thread on a 2-core runner. Pin the math-library pools.
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
@@ -34,11 +30,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      # The trained ML artifacts (*.pkl, optimal_features.json,
-      # anomaly_model.pkl, ...) are gitignored -- "regenerate via
-      # model_pipeline.py". CI regenerates them from the committed
-      # OBD_2_dataset.csv. Cached on the dataset + training-script hashes so
-      # this only re-runs when one of those actually changes.
+      # The trained binary artifacts (*.pkl, metrics.json,
+      # processed_telemetry.csv) are build output -- regenerated here, never
+      # committed. The one non-reproducible input, optimal_features.json
+      # (genetic_optimizer.py's exhaustive-search result), IS committed as
+      # pinned config so this regeneration is deterministic. Cached on the
+      # dataset + the scripts + that pinned config.
       - name: Cache ML artifacts
         id: ml-artifacts
         uses: actions/cache@v4
@@ -46,22 +43,24 @@ jobs:
           path: |
             processed_telemetry.csv
             feature_info.json
-            optimal_features.json
             best_model.pkl
             scaler.pkl
             label_encoder.pkl
             metrics.json
             anomaly_model.pkl
             anomaly_feature_bounds.json
-          key: ml-artifacts-${{ hashFiles('OBD_2_dataset.csv', 'data_prep.py', 'genetic_optimizer.py', 'model_pipeline.py', 'app/services/anomaly_detector.py') }}
+          key: ml-artifacts-${{ hashFiles('OBD_2_dataset.csv', 'data_prep.py', 'model_pipeline.py', 'optimal_features.json', 'app/services/anomaly_detector.py') }}
 
       - name: Generate ML artifacts
         if: steps.ml-artifacts.outputs.cache-hit != 'true'
         run: |
           python data_prep.py
-          python genetic_optimizer.py
           python model_pipeline.py
-          python -c "import json; from app.services.anomaly_detector import AnomalyDetector; feats = json.load(open('feature_info.json'))['features']; ok = AnomalyDetector().train(features=feats); raise SystemExit(0 if ok else 1)"
+          # Anomaly IsolationForest: trained on the 7-feature set the shipped
+          # anomaly_model.pkl / test fixtures use (all 8 minus CO2). This
+          # list is pinned here because it is not currently derivable from
+          # any committed config -- see tests/test_anomaly_detector.py.
+          python -c "from app.services.anomaly_detector import AnomalyDetector; feats = ['Altitude', 'Coolant', 'Litre per 100km(Instant)', 'RPM', 'RPM_Delta', 'CO2_Delta', 'Fuel_Rate_Delta']; raise SystemExit(0 if AnomalyDetector().train(features=feats) else 1)"
 
       - name: Run pytest with coverage
         run: pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml -v --timeout=120 --timeout-method=thread

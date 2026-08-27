@@ -1,0 +1,237 @@
+{
+  "selected_features": [
+    "Altitude",
+    "CO2",
+    "Coolant",
+    "Litre per 100km(Instant)",
+    "RPM",
+    "RPM_Delta",
+    "Fuel_Rate_Delta"
+  ],
+  "feature_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+  ],
+  "accuracy": 0.8507770007770008,
+  "methodology": "Exhaustive search over all non-empty feature subsets, evaluated by 5-fold stratified CV on the TRAIN split only -- the same held-out test split model_pipeline.py uses (test_size=0.2, random_state=42, stratify=y) is excluded from this search entirely. Fixes a prior leakage bug (task P1-1b) where this search ran on the full dataset including what later became the test split.",
+  "all_features": [
+    "Altitude",
+    "CO2",
+    "Coolant",
+    "Litre per 100km(Instant)",
+    "RPM",
+    "RPM_Delta",
+    "CO2_Delta",
+    "Fuel_Rate_Delta"
+  ],
+  "total_subsets_evaluated": 255,
+  "top_10_subsets": [
+    {
+      "features": [
+        "Altitude",
+        "CO2",
+        "Coolant",
+        "Litre per 100km(Instant)",
+        "RPM",
+        "RPM_Delta",
+        "Fuel_Rate_Delta"
+      ],
+      "indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        7
+      ],
+      "accuracy": 0.8507770007770008,
+      "n_features": 7
+    },
+    {
+      "features": [
+        "Altitude",
+        "CO2",
+        "Coolant",
+        "Litre per 100km(Instant)",
+        "RPM",
+        "RPM_Delta",
+        "CO2_Delta"
+      ],
+      "indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "accuracy": 0.8507672882672882,
+      "n_features": 7
+    },
+    {
+      "features": [
+        "Altitude",
+        "CO2",
+        "Coolant",
+        "RPM_Delta",
+        "Fuel_Rate_Delta"
+      ],
+      "indices": [
+        0,
+        1,
+        2,
+        5,
+        7
+      ],
+      "accuracy": 0.8493978243978244,
+      "n_features": 5
+    },
+    {
+      "features": [
+        "Altitude",
+        "CO2",
+        "Coolant",
+        "RPM",
+        "RPM_Delta",
+        "Fuel_Rate_Delta"
+      ],
+      "indices": [
+        0,
+        1,
+        2,
+        4,
+        5,
+        7
+      ],
+      "accuracy": 0.8479895104895105,
+      "n_features": 6
+    },
+    {
+      "features": [
+        "Altitude",
+        "CO2",
+        "Coolant",
+        "Litre per 100km(Instant)",
+        "RPM",
+        "RPM_Delta",
+        "CO2_Delta",
+        "Fuel_Rate_Delta"
+      ],
+      "indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "accuracy": 0.847960372960373,
+      "n_features": 8
+    },
+    {
+      "features": [
+        "CO2",
+        "Coolant",
+        "RPM_Delta",
+        "Fuel_Rate_Delta"
+      ],
+      "indices": [
+        1,
+        2,
+        5,
+        7
+      ],
+      "accuracy": 0.8452311577311578,
+      "n_features": 4
+    },
+    {
+      "features": [
+        "Altitude",
+        "CO2",
+        "Coolant",
+        "Litre per 100km(Instant)",
+        "RPM_Delta",
+        "Fuel_Rate_Delta"
+      ],
+      "indices": [
+        0,
+        1,
+        2,
+        3,
+        5,
+        7
+      ],
+      "accuracy": 0.8452020202020201,
+      "n_features": 6
+    },
+    {
+      "features": [
+        "Altitude",
+        "CO2",
+        "Coolant",
+        "RPM",
+        "RPM_Delta",
+        "CO2_Delta",
+        "Fuel_Rate_Delta"
+      ],
+      "indices": [
+        0,
+        1,
+        2,
+        4,
+        5,
+        6,
+        7
+      ],
+      "accuracy": 0.8451631701631701,
+      "n_features": 7
+    },
+    {
+      "features": [
+        "CO2",
+        "Coolant",
+        "RPM",
+        "RPM_Delta",
+        "Fuel_Rate_Delta"
+      ],
+      "indices": [
+        1,
+        2,
+        4,
+        5,
+        7
+      ],
+      "accuracy": 0.8438228438228439,
+      "n_features": 5
+    },
+    {
+      "features": [
+        "Altitude",
+        "Coolant",
+        "Litre per 100km(Instant)",
+        "RPM",
+        "RPM_Delta",
+        "Fuel_Rate_Delta"
+      ],
+      "indices": [
+        0,
+        2,
+        3,
+        4,
+        5,
+        7
+      ],
+      "accuracy": 0.8437937062937063,
+      "n_features": 6
+    }
+  ]
+}
