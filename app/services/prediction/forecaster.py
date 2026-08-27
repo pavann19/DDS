@@ -29,7 +29,11 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
-from app.services.frenet import FrenetFrame, frenet_to_local_xz
+from app.services.frenet import (
+    FrenetFrame,
+    frenet_to_local_xz,
+    frenet_to_local_xz_batch,
+)
 from app.services.interfaces import AgentPrediction, PredictedState
 
 DEFAULT_HORIZON_S = 3.0
@@ -167,15 +171,29 @@ def _poly(coeffs: Sequence[float], t: float) -> float:
     return sum(c * (t ** i) for i, c in enumerate(coeffs))
 
 
-def _project_xz_to_frenet(frame: FrenetFrame, px: float, pz: float) -> Tuple[float, float]:
-    """(x, z) -> (s, d) by exact clamped point-to-segment projection over the
-    whole route. Mirrors frenet.project_to_frenet's math without the lat/lng
-    round-trip (agents are already in the local metric frame)."""
+def _project_xz_to_frenet(
+    frame: FrenetFrame, px: float, pz: float,
+    hint_idx: int = 0, window: int = 0,
+) -> Tuple[float, float, int]:
+    """(x, z) -> (s, d, matched_segment_idx) by exact clamped point-to-segment
+    projection. Mirrors frenet.project_to_frenet's math without the lat/lng
+    round-trip (agents are already in the local metric frame).
+
+    ``window`` > 0 bounds the search to ``[hint_idx - window, hint_idx +
+    window]`` -- pass the previous tick's matched index so a slow-moving
+    agent is not re-scanned against the whole route every tick.
+    """
     pts = frame.points_xz
     station = frame.station
+    n_seg = len(pts) - 1
+    if window > 0:
+        lo = max(0, hint_idx - window)
+        hi = min(n_seg, hint_idx + window)
+    else:
+        lo, hi = 0, n_seg
     best_dist_sq = float("inf")
-    best_s, best_d = station[0], 0.0
-    for i in range(len(pts) - 1):
+    best_s, best_d, best_idx = station[0], 0.0, lo
+    for i in range(lo, hi):
         ax, az = pts[i]
         bx, bz = pts[i + 1]
         dx, dz = bx - ax, bz - az
@@ -192,7 +210,8 @@ def _project_xz_to_frenet(frame: FrenetFrame, px: float, pz: float) -> Tuple[flo
             best_s = station[i] + t * seg_len
             right_x, right_z = dz / seg_len, -dx / seg_len
             best_d = (px - cx) * right_x + (pz - cz) * right_z
-    return best_s, best_d
+            best_idx = i
+    return best_s, best_d, best_idx
 
 
 def _nearest_lane_center(d: float, lane_centers: Sequence[float]) -> float:
@@ -200,22 +219,25 @@ def _nearest_lane_center(d: float, lane_centers: Sequence[float]) -> float:
 
 
 def project_agent_frenet(
-    frame: FrenetFrame, x: float, z: float, vx: float, vz: float
-) -> Tuple[float, float, float, float]:
-    """(x, z, vx, vz) -> (s, d, v_s, v_d): station, signed lateral offset,
-    and the velocity resolved onto the route tangent / normal at ``s``.
+    frame: FrenetFrame, x: float, z: float, vx: float, vz: float,
+    hint_idx: int = 0, window: int = 0,
+) -> Tuple[float, float, float, float, int]:
+    """(x, z, vx, vz) -> (s, d, v_s, v_d, matched_idx): station, signed
+    lateral offset, the velocity resolved onto the route tangent / normal at
+    ``s``, and the matched segment index (feed back as ``hint_idx`` next
+    tick, with ``window`` > 0, to skip the full-route scan).
 
     ``v_d`` is *lane-relative* lateral drift -- an agent faithfully
     following a curve has ``v_d ~= 0`` even while its Cartesian heading
     sweeps, which is exactly what keeps intent estimation from crying
     "cut-in" on every bend (Gate 7.3).
     """
-    s, d = _project_xz_to_frenet(frame, x, z)
+    s, d, idx = _project_xz_to_frenet(frame, x, z, hint_idx=hint_idx, window=window)
     _, _, dir_x, dir_z = frenet_to_local_xz(frame, s, 0.0)
     right_x, right_z = dir_z, -dir_x
     v_s = vx * dir_x + vz * dir_z
     v_d = vx * right_x + vz * right_z
-    return s, d, v_s, v_d
+    return s, d, v_s, v_d, idx
 
 
 def forecast_lane_following(
@@ -225,12 +247,20 @@ def forecast_lane_following(
     step_s: float = DEFAULT_STEP_S,
     lane_centers: Sequence[float] = DEFAULT_LANE_CENTERS_M,
     settle_s: float = LANE_SETTLE_S,
+    frenet0: Optional[Tuple[float, float, float, float]] = None,
 ) -> List[PredictedState]:
     """Advance the agent along the road: ``s`` at along-track speed (+ accel),
     ``d`` relaxed to its nearest lane centre with a quintic that has zero
     lateral velocity/accel at ``settle_s`` and holds afterwards.
+
+    ``frenet0`` -- precomputed ``(s0, d0, v_s, v_d)`` from
+    :func:`project_agent_frenet`; pass it when the caller already projected
+    this agent this tick to avoid a second full-route scan.
     """
-    s0, d0, v_s, v_d = project_agent_frenet(frame, k.x, k.z, k.vx, k.vz)
+    if frenet0 is None:
+        s0, d0, v_s, v_d, _ = project_agent_frenet(frame, k.x, k.z, k.vx, k.vz)
+    else:
+        s0, d0, v_s, v_d = frenet0
     a_s = k.a_long_mps2                        # treat longitudinal accel as along-track
 
     d_target = _nearest_lane_center(d0, lane_centers)
@@ -239,31 +269,22 @@ def forecast_lane_following(
 
     s_end = frame.station[-1]
     n_out = _sample_indices(horizon_s, step_s)
-    out: List[PredictedState] = []
-    for i in range(1, n_out + 1):
-        t = i * step_s
-        s = s0 + v_s * t + 0.5 * a_s * t * t
-        s = max(0.0, min(s, s_end))
-        d = _poly(d_coeffs, t) if t < T else d_target
-        x, z, _, _ = frenet_to_local_xz(frame, s, d)
-        out.append(PredictedState(t_s=round(t, 4), x=x, z=z, vx=0.0, vz=0.0))
 
-    # Fill velocities by finite difference (forward for the first point).
-    for i, st in enumerate(out):
-        prev = out[i - 1] if i > 0 else None
-        nxt = out[i + 1] if i + 1 < len(out) else None
-        if prev is not None and nxt is not None:
-            vx = (nxt.x - prev.x) / (2 * step_s)
-            vz = (nxt.z - prev.z) / (2 * step_s)
-        elif nxt is not None:
-            vx = (nxt.x - st.x) / step_s
-            vz = (nxt.z - st.z) / step_s
-        elif prev is not None:
-            vx = (st.x - prev.x) / step_s
-            vz = (st.z - prev.z) / step_s
-        else:
-            vx = vz = 0.0
-        out[i] = PredictedState(t_s=st.t_s, x=st.x, z=st.z, vx=vx, vz=vz)
+    ts = [i * step_s for i in range(1, n_out + 1)]
+    ss = [max(0.0, min(s0 + v_s * t + 0.5 * a_s * t * t, s_end)) for t in ts]
+    ds = [(_poly(d_coeffs, t) if t < T else d_target) for t in ts]
+    xs, zs, _, _ = frenet_to_local_xz_batch(frame, ss, ds)
+    xs = [float(v) for v in xs]
+    zs = [float(v) for v in zs]
+
+    out: List[PredictedState] = []
+    for i in range(n_out):
+        lo = max(0, i - 1)
+        hi = min(n_out - 1, i + 1)
+        span = (hi - lo) * step_s or step_s
+        vx = (xs[hi] - xs[lo]) / span
+        vz = (zs[hi] - zs[lo]) / span
+        out.append(PredictedState(t_s=round(ts[i], 4), x=xs[i], z=zs[i], vx=vx, vz=vz))
     return out
 
 
@@ -273,15 +294,17 @@ def forecast_agent(
     horizon_s: float = DEFAULT_HORIZON_S,
     step_s: float = DEFAULT_STEP_S,
     lane_centers: Sequence[float] = DEFAULT_LANE_CENTERS_M,
+    frenet0: Optional[Tuple[float, float, float, float]] = None,
 ) -> AgentPrediction:
     """Pick a model and forecast one agent.
 
     CTRA when the agent is maneuvering (|yaw rate| >= threshold) or when no
-    road frame is available; Frenet lane-following otherwise.
+    road frame is available; Frenet lane-following otherwise. ``frenet0``
+    (precomputed projection) is forwarded to the lane-following model.
     """
     maneuvering = abs(k.yaw_rate_radps) >= YAW_RATE_MANEUVER_THRESH_RADPS
     if frame is None or maneuvering:
         states = forecast_ctra(k, horizon_s, step_s)
     else:
-        states = forecast_lane_following(k, frame, horizon_s, step_s, lane_centers)
+        states = forecast_lane_following(k, frame, horizon_s, step_s, lane_centers, frenet0=frenet0)
     return AgentPrediction(track_id=k.track_id, states=tuple(states))

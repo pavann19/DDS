@@ -37,6 +37,10 @@ from app.services.prediction.risk_field import (
     RiskFieldConfig,
     build_risk_field,
 )
+from app.services.prediction.prediction_engine import (
+    PredictionEngine,
+    PredictionResult,
+)
 
 __all__ = [
     "AgentKinematics",
@@ -54,4 +58,6 @@ __all__ = [
     "RiskFieldConfig",
     "build_risk_field",
     "RISK_FIELD_DEFAULT_CONFIG",
+    "PredictionEngine",
+    "PredictionResult",
 ]

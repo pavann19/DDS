@@ -276,7 +276,7 @@ def test_intent_gate_7_3_curve_follower_is_not_a_cut_in():
     speed = 13.0
     vx, vz = speed * dir_x, speed * dir_z
 
-    _, agent_d, _, agent_v_d = project_agent_frenet(_CURVED_FRAME, x0, z0, vx, vz)
+    _, agent_d, _, agent_v_d, _ = project_agent_frenet(_CURVED_FRAME, x0, z0, vx, vz)
     assert abs(agent_v_d) < 0.05, "curve follower should have ~zero Frenet lateral drift"
 
     est = estimate_intent_from_track(

@@ -182,7 +182,7 @@ def estimate_intent_from_track(
     straight heading -- callers with a route should always pass ``frame``.
     """
     if frame is not None:
-        _, agent_d, _, agent_v_d = project_agent_frenet(frame, x, z, vx, vz)
+        _, agent_d, _, agent_v_d, _ = project_agent_frenet(frame, x, z, vx, vz)
     else:
         agent_d, agent_v_d = x, vx
     speed = math.hypot(vx, vz)
