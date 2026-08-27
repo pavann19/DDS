@@ -293,9 +293,15 @@ Sequenced so each step is independently verifiable and the suite stays green.
    single dt source for scenario + physics, removing the hardcoded-`0.1` desync.
    Wall-clock `dt` fallback **retained** (hybrid decision — existing `_tick()`
    tests drive it); determinism runs through the explicit-dt + seeded path.
-5. [ ] **Relocate the ML** — *deferred to Phase 7.* Not behavior-preserving
-   (removing the `ai_decision` speed modulation changes trajectories and breaks
-   existing assertions), so it moves with the deep driver/scenario decouple.
+5. [x] **Relocate the ML** — done during Phase 7. `ai_decision` no longer
+   touches `target_speed` (the dead `+15 / -20 km/h` modulation is gone) nor
+   the powertrain flavour (RPM boost / fuel map now key off realised
+   acceleration, killing the model→telemetry→model feedback). The XGBoost
+   model, SHAP and anomaly detection remain, scored as a driver-behaviour /
+   eco-efficiency analytics channel. `ai_decision` stays on `update()`'s
+   signature (call-site compat) with no control effect;
+   `test_ai_decision_has_no_effect_on_the_control_path` asserts a
+   byte-identical trajectory across all three decisions. README updated.
 6. [x] **Split the Safety Shield out** as a parallel `SafetyMonitor` node
    (`driver/safety_monitor.py`) with veto-only authority. Own sensor feed is
    structural prep only today (shared `sensed_lead`); real separation + RSS/MRM
