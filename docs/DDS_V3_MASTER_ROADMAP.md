@@ -127,6 +127,68 @@ no multi-class classification, no persistent tracking through occlusion.
 
 ---
 
+## Phase 6.5 — Architectural restructure: World / Driver split
+**Estimate:** ~20–30h
+**Full rationale and options analysis:** `docs/DDS_ARCHITECTURE.md` (ADR-001).
+**Core problem:** four structural issues that every remaining phase makes
+worse, and that Phases 9, 11 and 13 are outright blocked by.
+
+This delivers **no new driving behavior**. It is the foundation the rest of
+the roadmap is built on, and it is strictly behavior-preserving — proven by
+the existing 189 tests passing unchanged.
+
+### The four problems
+1. **The learned model is in the control path and cannot see the road.** The
+   XGBoost classifier's inputs are all ego powertrain telemetry (`RPM`,
+   `CO2`, `Coolant`, fuel rate and their deltas) — nothing about traffic,
+   lanes or geometry — yet it perturbs `target_speed` by ±15–20 km/h
+   (`physics_engine.py:622-627`). It cannot help (blind to hazards) but can
+   hurt (commands acceleration for powertrain reasons). Production stacks put
+   learned models in perception/prediction and use a deterministic optimizer
+   for planning; DDS currently has this inverted.
+2. **Simulator and autonomy are the same object.** `PhysicsEngine` is both
+   the world and the driver, so the perception boundary is a convention
+   rather than a type signature, and the stack can't run against recorded
+   data or a swapped/failed driver.
+3. **Single-rate wall-clock execution.** One 10 Hz loop stepped by real
+   elapsed time — nondeterministic (contradicting the Scenario Engine's own
+   reproducibility guarantee, and already causing a tick/time desync against
+   `websockets.py`'s hardcoded `0.1`), and too slow for closed-loop control.
+4. **One god-payload to the frontend**, which won't survive Phase 6's
+   occupancy grid or Phase 7's per-agent predictions.
+
+### Scope
+- [ ] `interfaces.py` — typed contracts: `SensorObservation`,
+  `PerceptionOutput`, `PredictionOutput`, `PlannedTrajectory`,
+  `ActuatorCommand`, `SimClock`.
+- [ ] `world/` — vehicle dynamics + traffic + environment; `PhysicsEngine`
+  becomes a thin facade so existing tests pass unchanged.
+- [ ] `driver/` — Frenet, candidates, IDM, steering; may read *only*
+  `SensorObservation`.
+- [ ] Multi-rate deterministic executor: perception 20 Hz, prediction/
+  behavior/planner 10 Hz, controller + safety monitor 50 Hz. Wall-clock
+  `dt` deleted; the Scenario Engine tick/time desync fixed in the same change.
+- [ ] Relocate the ML out of the speed-target path into a driver-behavior
+  analytics channel (model, SHAP, calibration and OOD work all retained —
+  scored on a task it can actually perform). Update README/roadmap claims.
+- [ ] Split the Safety Shield into a parallel `SafetyMonitor` with its own
+  sensor feed and veto-only authority (prepares Phase 11's RSS/MRM).
+- [ ] Protocol v3 — layered channels: pose 50 Hz, semantic 10 Hz, heavy data
+  on-demand/delta-encoded.
+
+### Gates
+- **6.5.1** All 189 existing tests pass unchanged — the refactor is
+  behavior-preserving, not a rewrite.
+- **6.5.2** Determinism: same seed + same scenario produces a bit-identical
+  ego trajectory across two separate runs.
+- **6.5.3** Control loop runs at 50 Hz with total per-tick cost inside a
+  20 ms real-time budget (perception stays at its measured ~1.8 ms).
+- **6.5.4** The `Driver` has no code path that reads `TrafficModel` or
+  `NpcVehicle` — enforced by type signature and asserted by test.
+- **6.5.5** `tsc --noEmit` clean after the protocol v3 migration.
+
+---
+
 ## Phase 7 — Multi-Agent Trajectory Forecasting & Intent Engine
 **Estimate:** ~20–30h
 **Core problem:** planner treats all obstacles as fixed-velocity; late
@@ -331,7 +393,8 @@ behavior (tailgating, weaving, shockwaves).
 | Phase | Deliverable | New tests | Cumulative | Gate |
 |---|---|---|---|---|
 | Baseline | Phases 1-5 | — | 168 | 168/168, tsc clean |
-| 6 | Perception + EKF tracking | +18 | 186 | blind-spot detect, <2ms |
+| 6 | Perception + EKF tracking | +21 | 189 | blind-spot detect, <2ms |
+| 6.5 | World/Driver architecture | +determinism | 189+ | 189 unchanged + bit-identical replay |
 | 7 | Trajectory prediction | +15 | 201 | ≥1.2s cut-in warning |
 | 8 | Spatiotemporal planner | +20 | 221 | mid-maneuver abort |
 | 9 | Dynamic tire physics | +16 | 237 | step-steer, ABS |
@@ -342,7 +405,11 @@ behavior (tailgating, weaving, shockwaves).
 
 ## Execution order
 
-Sequential, starting at Phase 6 (perception is the data foundation Phases 7
-and 8 depend on). Each phase is built, its own tests written and passing,
-and live-verified before moving to the next — no phase is marked complete
-on partial coverage.
+Sequential. Phase 6 (perception) is complete. **Phase 6.5 (the World/Driver
+architectural restructure, ADR-001 in `docs/DDS_ARCHITECTURE.md`) comes
+next** — before Phase 7, because Phases 9, 11 and 13 are structurally
+blocked without it and every phase built on the current monolith increases
+the cost of doing it later.
+
+Each phase is built, its own tests written and passing, and live-verified
+before moving to the next — no phase is marked complete on partial coverage.
