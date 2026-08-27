@@ -99,7 +99,7 @@ class RiskField:
             lon, lat = dz, dx  # axis-aligned fallback for a stopped agent
 
         exponent = 0.5 * ((lon * lon) / (sig_lon * sig_lon) + (lat * lat) / (sig_lat * sig_lat))
-        if exponent > 60.0:
+        if not math.isfinite(exponent) or exponent > 60.0:
             return 0.0
         return math.exp(-exponent)
 

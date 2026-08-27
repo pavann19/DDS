@@ -66,6 +66,8 @@ class MultiRateExecutor:
 
     # -- registration ------------------------------------------------------
     def add_stage(self, name: str, hz: float, fn: StageFn) -> None:
+        if hz <= 0:
+            raise ValueError(f"stage '{name}' rate must be positive, got {hz}")
         period = self.base_hz / hz
         if abs(period - round(period)) > 1e-9:
             raise ValueError(

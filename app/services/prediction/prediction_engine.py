@@ -13,6 +13,7 @@ noisy lateral-drift and accel estimates before they reach intent scoring
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -31,6 +32,22 @@ from app.services.prediction.intent import (
     estimate_intent,
 )
 from app.services.prediction.risk_field import RiskField, RiskFieldConfig, build_risk_field
+
+logger = logging.getLogger(__name__)
+
+
+def _finite_track(t) -> bool:
+    """Reject a track whose position/velocity isn't finite -- a NaN from a
+    misbehaving tracker frame must not poison the forecast or the risk
+    field."""
+    try:
+        return all(
+            math.isfinite(float(v))
+            for v in (t.x, t.z, t.vx, t.vz)
+        )
+    except (TypeError, ValueError, AttributeError):
+        return False
+
 
 # EMA factor for the per-track drift/accel estimates (0 = frozen, 1 = raw).
 SMOOTHING_ALPHA = 0.4
@@ -96,6 +113,7 @@ class PredictionEngine:
         confirmed = [
             t for t in surround_tracks
             if getattr(t, "status", "CONFIRMED") in ("CONFIRMED", "COASTED")
+            and _finite_track(t)
         ]
         live_ids = {int(t.track_id) for t in confirmed}
         for stale in [tid for tid in self._history if tid not in live_ids]:
@@ -109,58 +127,21 @@ class PredictionEngine:
         best_ttc: Optional[float] = None
 
         for track in confirmed:
-            tid = int(track.track_id)
-            prev = self._history.get(tid)
-            kin = kinematics_from_track(track, prev.kin if prev else None, dt=dt)
-
-            # One windowed Frenet projection per agent per tick, reused for
-            # both intent (lane-relative drift) and the lane-following model.
-            frenet0 = None
-            seg_idx = prev.seg_idx if prev else 0
-            if frenet_frame is not None:
-                s0, agent_d, v_s, raw_drift, seg_idx = project_agent_frenet(
-                    frenet_frame, kin.x, kin.z, kin.vx, kin.vz,
-                    hint_idx=seg_idx, window=(FRENET_SEARCH_WINDOW if prev else 0),
+            try:
+                self._process_track(
+                    track, frenet_frame, ego_lateral_offset_m, dt, predictions, intents,
                 )
-                frenet0 = (s0, agent_d, v_s, raw_drift)
-            else:
-                agent_d, raw_drift = kin.x, kin.vx
-            raw_accel = kin.a_long_mps2
+            except Exception:  # pragma: no cover - defensive: one bad track must not kill the tick
+                logger.exception("prediction: skipping track %r after error", getattr(track, "track_id", "?"))
 
-            if prev is None:
-                drift_ema, accel_ema = raw_drift, raw_accel
-            else:
-                drift_ema = (1 - SMOOTHING_ALPHA) * prev.drift_ema + SMOOTHING_ALPHA * raw_drift
-                accel_ema = (1 - SMOOTHING_ALPHA) * prev.accel_ema + SMOOTHING_ALPHA * raw_accel
-
-            self._history[tid] = _TrackHistory(
-                kin=kin, drift_ema=drift_ema, accel_ema=accel_ema, seg_idx=seg_idx,
-            )
-
-            est = estimate_intent(
-                agent_d=agent_d,
-                agent_v_d=drift_ema,
-                agent_a_long_mps2=accel_ema,
-                agent_speed_mps=kin.speed_mps,
-                ego_d=ego_lateral_offset_m,
-            )
-            intents[tid] = est
-
-            pred = forecast_agent(kin, frame=frenet_frame, frenet0=frenet0)
-            pred = AgentPrediction(
-                track_id=pred.track_id,
-                states=pred.states,
-                intent=tuple(sorted(est.distribution.items(), key=lambda kv: -kv[1])),
-            )
-            predictions.append(pred)
-
+        for est_tid, est in intents.items():
             if (
                 est.p_cut_in > CUT_IN_ACTION_THRESHOLD
                 and est.time_to_cross_s is not None
                 and MIN_LEAD_S <= est.time_to_cross_s <= MAX_LEAD_S
                 and est.p_cut_in > best_p
             ):
-                best_p, best_id, best_ttc = est.p_cut_in, tid, est.time_to_cross_s
+                best_p, best_id, best_ttc = est.p_cut_in, est_tid, est.time_to_cross_s
 
         risk_field = build_risk_field(predictions, self._risk_config)
         output = PredictionOutput(clock=clock, agents=tuple(predictions))
@@ -175,3 +156,51 @@ class PredictionEngine:
             time_to_cross_s=best_ttc,
             proactive_decel_mps2=proactive,
         )
+
+    def _process_track(self, track, frenet_frame, ego_lateral_offset_m, dt, predictions, intents):
+        """Forecast + intent for one track. Appends to ``predictions`` /
+        ``intents``. Raises on bad input -- the caller isolates each track so
+        one failure does not kill the whole prediction stage."""
+        tid = int(track.track_id)
+        prev = self._history.get(tid)
+        kin = kinematics_from_track(track, prev.kin if prev else None, dt=dt)
+
+        # One windowed Frenet projection per agent per tick, reused for both
+        # intent (lane-relative drift) and the lane-following model.
+        frenet0 = None
+        seg_idx = prev.seg_idx if prev else 0
+        if frenet_frame is not None:
+            s0, agent_d, v_s, raw_drift, seg_idx = project_agent_frenet(
+                frenet_frame, kin.x, kin.z, kin.vx, kin.vz,
+                hint_idx=seg_idx, window=(FRENET_SEARCH_WINDOW if prev else 0),
+            )
+            frenet0 = (s0, agent_d, v_s, raw_drift)
+        else:
+            agent_d, raw_drift = kin.x, kin.vx
+        raw_accel = kin.a_long_mps2
+
+        if prev is None:
+            drift_ema, accel_ema = raw_drift, raw_accel
+        else:
+            drift_ema = (1 - SMOOTHING_ALPHA) * prev.drift_ema + SMOOTHING_ALPHA * raw_drift
+            accel_ema = (1 - SMOOTHING_ALPHA) * prev.accel_ema + SMOOTHING_ALPHA * raw_accel
+
+        self._history[tid] = _TrackHistory(
+            kin=kin, drift_ema=drift_ema, accel_ema=accel_ema, seg_idx=seg_idx,
+        )
+
+        est = estimate_intent(
+            agent_d=agent_d,
+            agent_v_d=drift_ema,
+            agent_a_long_mps2=accel_ema,
+            agent_speed_mps=kin.speed_mps,
+            ego_d=ego_lateral_offset_m,
+        )
+        intents[tid] = est
+
+        pred = forecast_agent(kin, frame=frenet_frame, frenet0=frenet0)
+        predictions.append(AgentPrediction(
+            track_id=pred.track_id,
+            states=pred.states,
+            intent=tuple(sorted(est.distribution.items(), key=lambda kv: -kv[1])),
+        ))
