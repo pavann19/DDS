@@ -16,7 +16,7 @@ from app.services.frenet import (
 from app.services.car_following import idm_acceleration
 from app.services import safety_shield
 from app.services.world import advance_position, step_powertrain
-from app.services.driver import plan_lateral_offset
+from app.services.driver import plan_lateral_offset, SafetyMonitor
 from app.services.perception.perception_engine import SurroundPerceptionEngine
 from app.services.planner import LANE_CENTER_D_M
 
@@ -170,6 +170,9 @@ class PhysicsEngine:
         # bicycle controller doesn't populate a real one until its first
         # tick with a route.
         self.shield_verdict = safety_shield.ShieldVerdict(approved=True, risk_level=safety_shield.RISK_NONE)
+        # Independent safety supervisor node (ADR-001 item 6). Veto-only:
+        # can brake the car harder, never accelerate or steer.
+        self.safety_monitor = SafetyMonitor()
         self.driving_state = DrivingState.IDLE
         # Latched once the destination is reached, and cleared only by
         # set_destination(). Without a latch the target speed is a pure
@@ -269,6 +272,8 @@ class PhysicsEngine:
         self.planner_candidates = []
         self.planner_chosen_d_m = LANE_CENTER_D_M
         self.shield_verdict = safety_shield.ShieldVerdict(approved=True, risk_level=safety_shield.RISK_NONE)
+        if hasattr(self, "safety_monitor"):
+            self.safety_monitor.reset()
 
         if self.controller != "legacy" and self.frenet_frame is not None:
             # OSRM often snaps the route origin to the nearest drivable road
@@ -775,36 +780,25 @@ class PhysicsEngine:
             # docstring for why this is a separate module, not more
             # planner logic: it re-derives risk from raw physical
             # quantities instead of trusting the planner's own bookkeeping.
-            self.shield_verdict = safety_shield.evaluate(
+            # Independent SafetyMonitor node (ADR-001 item 6): evaluates the
+            # shield and applies its veto-only override. Same evaluate()
+            # call, same min() compositions, same speed_limit_reason as the
+            # former inline block -- now a swappable parallel node, prep for
+            # Phase 11's RSS envelope + Minimum Risk Maneuver.
+            desired_accel, shield_reason = self.safety_monitor.step(
                 ego_speed_mps=v_mps,
                 lateral_offset_m=self.current_lateral_offset_m,
                 lateral_accel_mps2=self.lateral_accel_mps2,
                 sensed_lead_gap_m=self.sensed_lead.gap_m if self.sensed_lead else None,
                 sensed_lead_speed_mps=(self.sensed_lead.lead_speed_kmh / 3.6) if self.sensed_lead else None,
+                desired_accel=desired_accel,
+                a_max_brake_mps2=self.A_MAX_BRAKE_MPS2,
+                recovery_speed_kmh=self.MIN_CORNER_SPEED_KMH,
+                speed_kp=self.SPEED_KP,
             )
-            if self.shield_verdict.override_action == safety_shield.OVERRIDE_EMERGENCY_BRAKE:
-                # min() composition, same principle as IDM above: the
-                # shield can only ever make the car brake HARDER than
-                # already planned, never accelerate harder -- it forces
-                # maximum physical braking regardless of what the
-                # cruise/IDM composition above computed. Appropriate here
-                # because this path is only reached for an imminent
-                # collision (TTC critical) -- stopping IS the right call.
-                desired_accel = min(desired_accel, -self.A_MAX_BRAKE_MPS2)
-                self.speed_limit_reason = "safety_shield_override"
-            elif self.shield_verdict.override_action == safety_shield.OVERRIDE_RECOVER_LOW_SPEED:
-                # Deliberately NOT a full stop -- braking all the way to
-                # zero here (road-boundary/hard-lateral-accel violations)
-                # would remove the only thing that lets the car steer back
-                # under control (yaw_rate = v*tan(delta)/L needs forward
-                # speed): a real livelock found live, where the car froze
-                # off-road, permanently re-triggering the same override
-                # forever. Proportional control toward a low but nonzero
-                # recovery floor instead, same min() composition principle.
-                recovery_target_mps = self.MIN_CORNER_SPEED_KMH / 3.6
-                recovery_accel = self.SPEED_KP * (recovery_target_mps - v_mps)
-                desired_accel = min(desired_accel, recovery_accel)
-                self.speed_limit_reason = "safety_shield_override"
+            self.shield_verdict = self.safety_monitor.verdict
+            if shield_reason is not None:
+                self.speed_limit_reason = shield_reason
 
             desired_accel = max(-self.A_MAX_BRAKE_MPS2,
                                 min(self.A_MAX_ACCEL_MPS2, desired_accel))
@@ -954,6 +948,7 @@ class PhysicsEngine:
         self.route_index = 0
         self.speed_limit_reason = "cruise"
         self.shield_verdict = safety_shield.ShieldVerdict(approved=True, risk_level=safety_shield.RISK_NONE)
+        self.safety_monitor.reset()
         # A scenario reset should not leave stale track IDs/coasted history
         # from before the reset -- fresh engine, same as every other piece
         # of per-session state this method resets.

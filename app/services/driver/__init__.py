@@ -12,5 +12,6 @@ calling them (thin facade). The functions currently take the scalar subset of
 what switches them to the full typed object.
 """
 from app.services.driver.lateral_planner import LateralPlan, plan_lateral_offset
+from app.services.driver.safety_monitor import SafetyMonitor
 
-__all__ = ["LateralPlan", "plan_lateral_offset"]
+__all__ = ["LateralPlan", "plan_lateral_offset", "SafetyMonitor"]
