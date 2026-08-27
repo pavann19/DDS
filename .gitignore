@@ -8,20 +8,27 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Trained model artifacts (regenerate via model_pipeline.py)
+# Trained model artifacts.
+#
+# The DEPLOYED set is committed (small, ~2MB total): test_inference.py and
+# test_anomaly_detector.py exercise the real pipeline, and model_pipeline.py's
+# model *selection* (5-fold CV across RF/GB/MLP/XGBoost) + genetic_optimizer.py's
+# feature search are NOT reproducible run-to-run or across sklearn versions --
+# so a "regenerate on CI" strategy gives every environment a different model
+# and flaky tests. Committing the exact shipped artifacts makes CI and local
+# test the same thing. Regenerate deliberately via
+# data_prep.py -> genetic_optimizer.py -> model_pipeline.py and review the diff.
 *.pkl
-anomaly_feature_bounds.json
-feature_info.json
-metrics.json
-
-# optimal_features.json is the ONE exception: it is genetic_optimizer.py's
-# exhaustive-search result, which is not reproducible run-to-run (tie
-# breaks), and model_pipeline.py + the inference tests depend on the exact
-# subset. So it is committed as pinned config -- small, diffable, reviewed
-# on change -- and CI regenerates every other artifact from it.
+!best_model.pkl
+!scaler.pkl
+!label_encoder.pkl
+!anomaly_model.pkl
+!anomaly_feature_bounds.json
+!feature_info.json
 !optimal_features.json
 
-# Processed/derived data (regenerate via data_prep.py)
+# Derived / report-only, regenerated via data_prep.py / model_pipeline.py:
+metrics.json
 processed_telemetry.csv
 
 # Runtime database

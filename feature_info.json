@@ -1,0 +1,19 @@
+{
+  "features": [
+    "Altitude",
+    "CO2",
+    "Coolant",
+    "Litre per 100km(Instant)",
+    "RPM",
+    "RPM_Delta",
+    "CO2_Delta",
+    "Fuel_Rate_Delta"
+  ],
+  "target": "Driving_Decision",
+  "total_samples": 897,
+  "class_distribution": {
+    "Maintain Speed": 711,
+    "Accelerate": 104,
+    "Decelerate": 82
+  }
+}

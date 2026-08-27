@@ -6,19 +6,12 @@ artifacts checked into the repo -- these tests exercise the actual
 deployed detector, not a mock, matching the real-pipeline-not-mock
 approach to robustness testing.
 """
-import os
-
 import pytest
 from app.services.anomaly_detector import AnomalyDetector
 
-# Assert against the specific shipped anomaly_model.pkl (an IsolationForest
-# on a hand-picked 7-feature set). CI regenerates a different model, so
-# these can only hold against the developer's local artifacts -- same
-# local-only pattern as tests/test_websocket_smoke.py.
-pytestmark = pytest.mark.skipif(
-    os.environ.get("CI") == "true",
-    reason="Asserts against a specific shipped anomaly_model.pkl; regeneration is not reproducible on CI. Run locally.",
-)
+# Runs everywhere: the exact trained anomaly_model.pkl /
+# anomaly_feature_bounds.json (an IsolationForest on a hand-picked 7-feature
+# set) are committed to the repo.
 
 
 @pytest.fixture(scope="module")
