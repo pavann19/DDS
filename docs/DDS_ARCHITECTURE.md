@@ -1,6 +1,6 @@
 # ADR-001: Restructure DDS into a World/Driver Autonomy Architecture
 
-**Status:** Proposed
+**Status:** Accepted — partially implemented (Phase 6.5 in progress; see *Implementation status* below)
 **Date:** 2026-08-27
 **Deciders:** Project owner (sole maintainer)
 **Supersedes:** the implicit architecture that grew organically through Phases 1–6
@@ -277,29 +277,59 @@ everyone outside them. That is the claim worth making, and it is provable.
 
 Sequenced so each step is independently verifiable and the suite stays green.
 
-1. [ ] **Define the contracts** — `app/services/interfaces.py`: `SensorObservation`,
+1. [x] **Define the contracts** — `app/services/interfaces.py`: `SensorObservation`,
    `PerceptionOutput`, `PredictionOutput`, `PlannedTrajectory`, `ActuatorCommand`,
    `SimClock`. Pure dataclasses, no logic.
-2. [ ] **Extract the World** — move dynamics integration + `TrafficModel`
-   ownership into `app/services/world/`. `PhysicsEngine` keeps its public
-   method names as a thin facade so all 189 tests keep passing unchanged.
-3. [ ] **Extract the Driver** — move Frenet projection, candidate scoring, IDM,
-   and steering into `app/services/driver/`, reading only `SensorObservation`.
-4. [ ] **Multi-rate executor** — `SimClock` with fixed-step substepping;
-   perception 20 Hz, prediction/behavior/planner 10 Hz, controller +
-   safety monitor 50 Hz. Delete wall-clock `dt`; fix the Scenario Engine's
-   hardcoded `0.1` desync in the same change.
-5. [ ] **Relocate the ML** — remove `ai_decision` from the speed-target path;
-   re-home the XGBoost model + SHAP + anomaly detection as a driver-behavior
-   analytics channel. Update README/roadmap claims to match.
-6. [ ] **Split the Safety Shield out** as a parallel `SafetyMonitor` node with
-   its own sensor feed and veto-only authority (prepares Phase 11's RSS/MRM).
-7. [ ] **Protocol v3** — layered channels: pose 50 Hz (small), semantic 10 Hz,
-   heavy data (occupancy/predictions) on-demand and delta-encoded.
-8. [ ] **Determinism test** — same seed + same scenario ⇒ bit-identical
-   trajectory across two runs. This is the gate that proves the refactor.
+2. [~] **Extract the World** — dynamics integration (`world/vehicle_dynamics.py`:
+   `step_powertrain`, `advance_position`) moved out verbatim; `PhysicsEngine`
+   delegates. `TrafficModel` ownership left in place (hybrid decision — see below).
+3. [~] **Extract the Driver** — lateral planning + pure-pursuit tracking moved to
+   `driver/lateral_planner.py`, reading only the scalar subset of a
+   `SensorObservation` (no `TrafficModel`/NPC list). IDM composition and the
+   no-route fallback still inline pending the full `SensorObservation` wiring.
+4. [x] **Multi-rate executor** — `app/services/executor.py` (`MultiRateExecutor`,
+   100 Hz base, deterministic rate dispatch, tested). `SimClock` wired into
+   `PhysicsEngine` (fixed 20 ms substep grid) and into `websockets.py` as the
+   single dt source for scenario + physics, removing the hardcoded-`0.1` desync.
+   Wall-clock `dt` fallback **retained** (hybrid decision — existing `_tick()`
+   tests drive it); determinism runs through the explicit-dt + seeded path.
+5. [ ] **Relocate the ML** — *deferred to Phase 7.* Not behavior-preserving
+   (removing the `ai_decision` speed modulation changes trajectories and breaks
+   existing assertions), so it moves with the deep driver/scenario decouple.
+6. [x] **Split the Safety Shield out** as a parallel `SafetyMonitor` node
+   (`driver/safety_monitor.py`) with veto-only authority. Own sensor feed is
+   structural prep only today (shared `sensed_lead`); real separation + RSS/MRM
+   is Phase 11.
+7. [ ] **Protocol v3** — *deferred to Phase 7.* A layered/delta-encoded channel
+   split is not behavior-preserving (breaks the v2 payload shape the frontend
+   and `test_websocket_smoke` depend on) and the heavy data it restructures for
+   (per-agent predictions) does not exist until Phase 7.
+8. [x] **Determinism test** — `tests/test_determinism.py`: same seed + same
+   scenario ⇒ bit-identical ego trajectory (and `SafetyMonitor` verdict
+   sequence) across two runs, on the explicit-dt path.
 
 **Acceptance:** all 189 existing tests pass unchanged (behavior-preserving),
 plus the new determinism test, plus `tsc --noEmit` clean. No new driving
 capability is claimed from this ADR — it is the foundation Phases 7–13 are
 built on.
+
+## Implementation status (2026-08-27)
+
+Branch `phase-6.5-world-driver`. Delivered: items 1, 4, 6, 8 in full; items 2
+and 3 as a **hybrid extraction** — the math is moved into `world/` and
+`driver/` as pure, independently-tested modules that `PhysicsEngine` calls,
+but `PhysicsEngine` stays the public object and `scenario_engine` still
+assigns/mutates `physics.traffic` directly. Rationale: the existing 189 tests
+and `scenario_engine` reach deep into `PhysicsEngine` internals, so a full
+type-signature boundary would require rewriting them, violating the
+"189 unchanged" gate. The full decouple (and items 5 and 7, which are also not
+behavior-preserving) is sequenced into Phase 7, which needs a swappable driver
+regardless.
+
+Gate status: **6.5.1** met (189 unchanged, +36 new unit tests, 225 total).
+**6.5.2** met on the explicit-dt path (`test_determinism.py`). **6.5.3** —
+`MultiRateExecutor` exists and is tested but does not yet drive `PhysicsEngine`
+at granular rates (deferred with the deep split). **6.5.4** — enforced for the
+extracted `driver/` modules (handed no `TrafficModel`/NPC list), not yet for
+`PhysicsEngine` as a whole. **6.5.5** — `tsc --noEmit` still clean (no frontend
+change); the protocol v3 migration itself is deferred.

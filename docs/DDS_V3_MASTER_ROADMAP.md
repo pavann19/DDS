@@ -158,34 +158,42 @@ the existing 189 tests passing unchanged.
    occupancy grid or Phase 7's per-agent predictions.
 
 ### Scope
-- [ ] `interfaces.py` — typed contracts: `SensorObservation`,
+- [x] `interfaces.py` — typed contracts: `SensorObservation`,
   `PerceptionOutput`, `PredictionOutput`, `PlannedTrajectory`,
   `ActuatorCommand`, `SimClock`.
-- [ ] `world/` — vehicle dynamics + traffic + environment; `PhysicsEngine`
-  becomes a thin facade so existing tests pass unchanged.
-- [ ] `driver/` — Frenet, candidates, IDM, steering; may read *only*
-  `SensorObservation`.
-- [ ] Multi-rate deterministic executor: perception 20 Hz, prediction/
-  behavior/planner 10 Hz, controller + safety monitor 50 Hz. Wall-clock
-  `dt` deleted; the Scenario Engine tick/time desync fixed in the same change.
-- [ ] Relocate the ML out of the speed-target path into a driver-behavior
-  analytics channel (model, SHAP, calibration and OOD work all retained —
-  scored on a task it can actually perform). Update README/roadmap claims.
-- [ ] Split the Safety Shield into a parallel `SafetyMonitor` with its own
-  sensor feed and veto-only authority (prepares Phase 11's RSS/MRM).
-- [ ] Protocol v3 — layered channels: pose 50 Hz, semantic 10 Hz, heavy data
-  on-demand/delta-encoded.
+- [~] `world/` — `vehicle_dynamics.py` (`step_powertrain`, `advance_position`)
+  extracted verbatim; `PhysicsEngine` delegates. Full `TrafficModel`/facade
+  decouple deferred to Phase 7 (hybrid decision — see ADR-001 status note).
+- [~] `driver/` — `lateral_planner.py` (Frenet candidates + pure-pursuit
+  tracking) extracted, reading only the scalar subset of `SensorObservation`.
+  IDM composition + no-route fallback still inline pending the full
+  `SensorObservation` wiring in Phase 7.
+- [x] Multi-rate deterministic executor: `executor.py` (`MultiRateExecutor`,
+  100 Hz base, tested rate dispatch). `SimClock` wired into `PhysicsEngine`
+  (fixed 20 ms substep) and `websockets.py` (single dt source for scenario +
+  physics — desync removed). Wall-clock `dt` fallback retained (hybrid).
+- [ ] Relocate the ML out of the speed-target path — **deferred to Phase 7**
+  (not behavior-preserving; moves with the deep decouple).
+- [x] Split the Safety Shield into a parallel `SafetyMonitor`
+  (`driver/safety_monitor.py`), veto-only. Own sensor feed / RSS / MRM is
+  Phase 11.
+- [ ] Protocol v3 — **deferred to Phase 7** (breaks the v2 payload shape;
+  the heavy data it restructures for doesn't exist until Phase 7).
 
 ### Gates
-- **6.5.1** All 189 existing tests pass unchanged — the refactor is
-  behavior-preserving, not a rewrite.
-- **6.5.2** Determinism: same seed + same scenario produces a bit-identical
-  ego trajectory across two separate runs.
-- **6.5.3** Control loop runs at 50 Hz with total per-tick cost inside a
-  20 ms real-time budget (perception stays at its measured ~1.8 ms).
-- **6.5.4** The `Driver` has no code path that reads `TrafficModel` or
-  `NpcVehicle` — enforced by type signature and asserted by test.
-- **6.5.5** `tsc --noEmit` clean after the protocol v3 migration.
+- **6.5.1** ✅ All 189 existing tests pass unchanged; +36 new unit tests
+  (225 total) for the extracted modules and the determinism gate.
+- **6.5.2** ✅ Determinism: `tests/test_determinism.py` — same seed + same
+  scenario produces a bit-identical ego trajectory (and `SafetyMonitor`
+  verdict sequence) across two separate runs, on the explicit-dt path.
+- **6.5.3** ⏳ `MultiRateExecutor` built and tested but not yet driving
+  `PhysicsEngine` at granular 50/20/10 Hz rates (lands with the Phase 7
+  deep split).
+- **6.5.4** ⏳ Enforced for the extracted `driver/` modules (handed no
+  `TrafficModel`/`NpcVehicle`); `PhysicsEngine` as a whole still reads
+  ground truth as the facade.
+- **6.5.5** ✅ (trivially) `tsc --noEmit` clean — no frontend change; the
+  protocol v3 migration itself is deferred to Phase 7.
 
 ---
 
@@ -394,7 +402,7 @@ behavior (tailgating, weaving, shockwaves).
 |---|---|---|---|---|
 | Baseline | Phases 1-5 | — | 168 | 168/168, tsc clean |
 | 6 | Perception + EKF tracking | +21 | 189 | blind-spot detect, <2ms |
-| 6.5 | World/Driver architecture | +determinism | 189+ | 189 unchanged + bit-identical replay |
+| 6.5 | World/Driver architecture (partial; items 5/7 → P7) | +36 | 225 | 189 unchanged + bit-identical replay |
 | 7 | Trajectory prediction | +15 | 201 | ≥1.2s cut-in warning |
 | 8 | Spatiotemporal planner | +20 | 221 | mid-maneuver abort |
 | 9 | Dynamic tire physics | +16 | 237 | step-steer, ABS |
