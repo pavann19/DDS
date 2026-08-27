@@ -322,7 +322,12 @@ class PhysicsEngine:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
         return R * c
 
-    def update(self, ai_decision: str, dt: Optional[float] = None):
+    def update(self, ai_decision: str = "Maintain Speed", dt: Optional[float] = None):
+        # ai_decision: retained for call-site/telemetry compatibility only.
+        # Since ADR-001 item 5 it has NO effect on control -- the learned
+        # model is scored as driver-behaviour analytics, not a driving
+        # policy. Kept as a positional arg so existing callers/tests are
+        # unchanged.
         now = time.time()
         if dt is None:
             dt = min(now - self.last_update_time, 0.5)
@@ -634,20 +639,18 @@ class PhysicsEngine:
 
         # Speed & Engine
         #
-        # The car now has its own baseline cruise-toward-destination speed,
-        # like a real adaptive-cruise/autopilot controller, instead of speed
-        # being driven *solely* by the ML decision. Previously target_speed
-        # was ONLY set by ai_decision ('Accelerate' -> +5, 'Decelerate' ->
-        # -8, else -> hold current speed) -- since the classifier predicts
-        # "Maintain Speed" from idle-looking telemetry (RPM~800, near-zero
-        # deltas), a car starting at rest fed that exact idle reading back
-        # every tick, so it could never bootstrap out of "Maintain Speed" ->
-        # target_speed stays at the current speed (0) -> forever stationary.
-        # This is why the dashboard never actually showed the car moving.
-        # The ML decision still matters -- it now modulates the baseline
-        # (Accelerate pushes above cruise speed, Decelerate pulls below it)
-        # so it's visibly reflected in how fast the car speeds up/slows
-        # down, without being the only thing that can start motion at all.
+        # ADR-001 item 5: the learned model is OUT of the speed-target path.
+        # It reads only ego powertrain telemetry (RPM, CO2, coolant, fuel
+        # rate and deltas) -- nothing about traffic, lanes or geometry -- so
+        # it is structurally unable to be a driving policy. It is now scored
+        # as driver-behaviour / eco-efficiency analytics (see
+        # get_ml_features() and websockets.py's driver_score channel), and
+        # target_speed is set purely by the deterministic policy: a baseline
+        # cruise-toward-destination speed, then the hard physical constraints
+        # below (curvature cap, tracking-error cap, IDM car-following,
+        # Phase 7 predictive cut-in response, Safety Shield). `ai_decision`
+        # is retained on the signature for callers/telemetry but no longer
+        # influences control.
         CRUISE_SPEED = 50.0
         if dist < 10.0:
             self.has_arrived = True
@@ -664,20 +667,12 @@ class PhysicsEngine:
         else:
             base_target_speed = CRUISE_SPEED
 
-        if self.has_arrived:
-            # Arrival overrides the ML decision: an 'Accelerate' prediction must
-            # not pull the stopped car away from its destination.
-            target_speed = 0.0
-        elif ai_decision == 'Accelerate':
-            target_speed = min(base_target_speed + 15.0, 120.0)
-        elif ai_decision == 'Decelerate':
-            target_speed = max(base_target_speed - 20.0, 0.0)
-        else:
-            target_speed = base_target_speed
+        # target_speed is the deterministic baseline; every constraint below
+        # can only lower it.
+        target_speed = 0.0 if self.has_arrived else base_target_speed
 
-        # Cornering speed cap -- applied AFTER the AI decision's modulation,
-        # as a hard physical constraint (grip/turning radius), not just
-        # another input the AI's Accelerate call can override.
+        # Cornering speed cap -- a hard physical constraint (grip/turning
+        # radius).
         self.speed_limit_reason = "cruise"
         if self.controller == "legacy":
             # Pre-P6 heuristic: linear interpolation between two hand-picked
@@ -747,9 +742,6 @@ class PhysicsEngine:
                     if tracking_cap_kmh < target_speed:
                         target_speed = tracking_cap_kmh
                         self.speed_limit_reason = "tracking_correction"
-
-        if target_speed < base_target_speed and self.speed_limit_reason == "cruise":
-            self.speed_limit_reason = "ai_decelerate" if ai_decision == 'Decelerate' else "approach"
 
         if self.controller == "legacy":
             speed_diff = target_speed - self.speed_kmh
@@ -840,20 +832,29 @@ class PhysicsEngine:
                                 min(self.A_MAX_ACCEL_MPS2, desired_accel))
 
             max_accel_step = self.JERK_MAX_MPS3 * dt
+            accel_at_tick_start = self.acceleration_mps2
             accel_error = desired_accel - self.acceleration_mps2
             self.acceleration_mps2 += max(-max_accel_step, min(max_accel_step, accel_error))
 
             v_mps += self.acceleration_mps2 * dt
             if v_mps <= 0.0:
                 # Stopped: bleed off any wound-up braking demand so pulling
-                # away again starts from ~zero acceleration. Ease it toward 0
-                # within the jerk limit rather than snapping (a snap from a
-                # large negative value is itself a jerk spike -- and the car
-                # is held at v = 0 meanwhile, so the ramp has no visible
-                # effect, it only keeps the diagnostic continuous).
+                # away again starts from ~zero acceleration, rather than
+                # snapping a large negative value straight to 0 (itself a
+                # jerk spike). The car is held at v = 0 meanwhile, so this
+                # ramp has no visible effect -- it only keeps the diagnostic
+                # continuous.
                 v_mps = 0.0
                 if self.acceleration_mps2 < 0.0:
                     self.acceleration_mps2 = min(0.0, self.acceleration_mps2 + max_accel_step)
+            # Final jerk guard: whatever adjustments happened above (jerk
+            # limiter + stopped-bleed can both fire in one tick at a corner
+            # standstill), the realised acceleration must not move more than
+            # one jerk step from where it started this tick.
+            self.acceleration_mps2 = max(
+                accel_at_tick_start - max_accel_step,
+                min(accel_at_tick_start + max_accel_step, self.acceleration_mps2),
+            )
             self.speed_kmh = min(v_mps * 3.6, 160.0)
 
         # Diagnostic: the lateral acceleration ACTUALLY being experienced right
@@ -868,12 +869,22 @@ class PhysicsEngine:
         yaw_rate_radps = math.radians(heading_delta_deg) / dt if dt > 0 else 0.0
         self.lateral_accel_mps2 = abs((self.speed_kmh / 3.6) * yaw_rate_radps)
         
-        # Powertrain / emissions relaxation-integration -- extracted verbatim
-        # into world/vehicle_dynamics.py (ADR-001 item 2). Same arithmetic,
-        # same RNG call order (idle-RPM jitter then altitude drift).
+        # Powertrain / emissions relaxation-integration (world/
+        # vehicle_dynamics.py, ADR-001 item 2). Its "accelerating" flavour
+        # (RPM boost + richer fuel map) is now keyed off the REALISED
+        # longitudinal acceleration, not the learned model's guess -- item 5
+        # takes the model out of the loop, and a real throttle correlates
+        # with real acceleration, not with a classifier reading coolant
+        # temperature. This also removes the model -> telemetry -> model
+        # feedback the old wiring created.
+        powertrain_decision = (
+            "Accelerate" if self.acceleration_mps2 > 0.3
+            else "Decelerate" if self.acceleration_mps2 < -0.3
+            else "Maintain Speed"
+        )
         pt = step_powertrain(
             speed_kmh=self.speed_kmh,
-            ai_decision=ai_decision,
+            ai_decision=powertrain_decision,
             rpm=self.rpm,
             coolant_temp=self.coolant_temp,
             fuel_rate=self.fuel_rate,

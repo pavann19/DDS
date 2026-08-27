@@ -172,8 +172,12 @@ the existing 189 tests passing unchanged.
   100 Hz base, tested rate dispatch). `SimClock` wired into `PhysicsEngine`
   (fixed 20 ms substep) and `websockets.py` (single dt source for scenario +
   physics — desync removed). Wall-clock `dt` fallback retained (hybrid).
-- [ ] Relocate the ML out of the speed-target path — **deferred to Phase 7**
-  (not behavior-preserving; moves with the deep decouple).
+- [x] Relocate the ML out of the speed-target path (done in Phase 7).
+  `ai_decision` no longer influences `target_speed` or the powertrain flavour
+  (which now keys off realised acceleration) -- the XGBoost model + SHAP +
+  anomaly detection are a driver-behaviour / eco-efficiency analytics
+  channel. `test_ai_decision_has_no_effect_on_the_control_path` locks it in;
+  README claims updated.
 - [x] Split the Safety Shield into a parallel `SafetyMonitor`
   (`driver/safety_monitor.py`), veto-only. Own sensor feed / RSS / MRM is
   Phase 11.
