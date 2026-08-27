@@ -52,7 +52,7 @@ self.onmessage = (e: MessageEvent) => {
         if (data.type === 'state') {
           const payload = data as TelemetryStatePayload;
           // Validate & Normalize
-          if (payload.protocol_version !== "2.0") {
+          if (payload.protocol_version !== "3.0") {
              console.warn("Unsupported protocol version:", payload.protocol_version);
           }
           const normalized = normalizeCoordinates(payload);

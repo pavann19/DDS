@@ -53,8 +53,9 @@ def test_car_moves_toward_a_distant_destination_even_if_ai_only_ever_says_mainta
     telemetry, a car starting at rest fed that same idle reading back every
     tick could never leave 0 km/h -- "Maintain Speed" held the target at the
     current speed forever. The physics engine must now have its own
-    baseline cruise-toward-destination speed so the car actually drives,
-    with the AI decision only modulating that baseline."""
+    baseline cruise-toward-destination speed so the car actually drives.
+    (Since ADR-001 item 5 the AI decision has no effect on control at all --
+    see test_ai_decision_has_no_effect_on_the_control_path.)"""
     engine = PhysicsEngine()
     engine.target_lat = engine.lat + 0.02  # a destination ~2km away
     engine.target_lng = engine.lng + 0.02
@@ -66,20 +67,25 @@ def test_car_moves_toward_a_distant_destination_even_if_ai_only_ever_says_mainta
     assert (engine.lat, engine.lng) != (start_lat, start_lng), "car must actually change position"
 
 
-def test_accelerate_decision_pushes_speed_above_decelerate_decision():
-    """The AI decision should still visibly modulate speed relative to the
-    baseline cruise target, even though it's no longer the sole driver."""
-    accel_engine = PhysicsEngine()
-    accel_engine.target_lat = accel_engine.lat + 0.02
-    accel_engine.target_lng = accel_engine.lng + 0.02
-    _tick(accel_engine, "Accelerate", dt=0.1, ticks=50)
+def test_ai_decision_has_no_effect_on_the_control_path():
+    """ADR-001 item 5: the learned model is OUT of the speed-target path.
+    It reads only ego powertrain telemetry (RPM/CO2/coolant/fuel), so it
+    cannot be a driving policy -- it is scored as driver-behaviour analytics
+    instead. Feeding 'Accelerate' vs 'Decelerate' vs 'Maintain Speed' must
+    produce a byte-identical ego trajectory."""
+    def drive(decision):
+        eng = PhysicsEngine(seed=99)
+        eng.target_lat = eng.lat + 0.02
+        eng.target_lng = eng.lng + 0.02
+        for _ in range(120):
+            eng.update(decision, dt=0.1)
+        return (eng.lat, eng.lng, eng.speed_kmh, eng.heading,
+                eng.acceleration_mps2, eng.steering_angle_rad)
 
-    decel_engine = PhysicsEngine()
-    decel_engine.target_lat = decel_engine.lat + 0.02
-    decel_engine.target_lng = decel_engine.lng + 0.02
-    _tick(decel_engine, "Decelerate", dt=0.1, ticks=50)
-
-    assert accel_engine.speed_kmh > decel_engine.speed_kmh
+    accelerate = drive("Accelerate")
+    decelerate = drive("Decelerate")
+    maintain = drive("Maintain Speed")
+    assert accelerate == decelerate == maintain
 
 
 def test_car_stops_on_arrival_at_destination():
@@ -226,11 +232,14 @@ def _straight_route(n=100):
 
 
 def _drive(engine, decision, ticks, dt=0.1):
-    """Drive, returning per-tick (speed_mps, accel, lateral_accel) traces."""
+    """Drive, returning per-tick (speed_mps, accel, lateral_accel) traces.
+
+    Steps with an EXPLICIT dt so the traces are deterministic and the
+    jerk/accel bounds below can be checked exactly -- the wall-clock path is
+    exercised by the _tick()-based tests instead."""
     speeds, accels, lat_accels = [], [], []
     for _ in range(ticks):
-        engine.last_update_time = time.time() - dt
-        engine.update(decision)
+        engine.update(decision, dt=dt)
         speeds.append(engine.speed_kmh / 3.6)
         accels.append(engine.acceleration_mps2)
         lat_accels.append(engine.lateral_accel_mps2)

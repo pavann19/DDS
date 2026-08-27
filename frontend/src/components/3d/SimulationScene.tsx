@@ -21,7 +21,6 @@ import {
 // (Line2/LineMaterial under the hood) gives real width control -- already
 // a project dependency (@react-three/drei), no new install.
 const CANDIDATE_PATH_HORIZON_M = 40;
-const NPC_PREDICTION_HORIZON_S = 3;
 
 // Waymo / Tesla Autonomous Palette
 const THEME = {
@@ -485,44 +484,76 @@ function PlannerCandidatePaths() {
   );
 }
 
-// --- 4c. Predicted NPC Paths: a simple constant-velocity projection of
-// each visible NPC's own lane, ahead of it -- a projection, not a claim
-// of real trajectory prediction (there isn't one). Direction inferred
-// from lane_offset sign, matching traffic.py's real spawn convention
-// (negative = oncoming, decreasing station over time). ---
-function PredictedNpcPaths() {
-  const traffic = useSimulationStore((state) => state.traffic);
-  const ego = useSimulationStore((state) => state.ego);
-  const routeGeom = useRouteGeometry();
-  const egoS = ego?.frenet?.s ?? 0;
+// --- 4c. Predictive Ribbons (Phase 7): the real per-agent trajectory
+// forecast (app/services/prediction/), coloured by dominant intent. The
+// forecast trail points are already in the same local (x, z) metric frame
+// this scene renders in (frenet_to_local_xz on the backend === toLocalXZ
+// here, same route origin), so they plot directly -- no ego-relative
+// transform. ---
+const INTENT_COLOR: Record<string, string> = {
+  LANE_KEEP: THEME.detectedSafe,
+  MERGE_LEFT: THEME.detectedWarning,
+  MERGE_RIGHT: THEME.detectedWarning,
+  DECELERATING: THEME.laneYellow,
+  STOPPING: THEME.detectedCritical,
+};
 
-  if (!routeGeom) return null;
-
-  const visibleTraffic = traffic.filter((npc) => Math.abs((npc.frenet?.s ?? 0) - egoS) < 220);
+function PredictedAgentRibbons() {
+  const prediction = useSimulationStore((state) => state.prediction);
+  if (!prediction || prediction.agents.length === 0) return null;
 
   return (
     <group>
-      {visibleTraffic.map((npc) => {
-        // Signed station delta over the horizon: positive/increasing
-        // station for same-direction traffic, negative for oncoming
-        // (lane_offset < 0, per traffic.py's real spawn convention).
-        const stationDeltaM = (npc.frenet.d < 0 ? -1 : 1) * npc.velocity * NPC_PREDICTION_HORIZON_S;
-        const points = sampleFrenetCorridor(routeGeom, npc.frenet.s, npc.frenet.d, npc.frenet.d, stationDeltaM, 6);
+      {prediction.agents.map((agent) => {
+        if (!agent.trail || agent.trail.length < 2) return null;
+        const points = agent.trail.map((p) => new THREE.Vector3(p.x, 0.16, p.z));
+        const dominant = agent.intent[0]?.label ?? 'LANE_KEEP';
+        const color = INTENT_COLOR[dominant] ?? THEME.npcTaillight;
+        const isCutInAgent = prediction.cut_in.active && prediction.cut_in.track_id === agent.track_id;
         return (
           <Line
-            key={`predicted-${npc.id}`}
+            key={`forecast-${agent.track_id}`}
             points={points}
-            color={THEME.npcTaillight}
-            lineWidth={1.5}
+            color={color}
+            lineWidth={isCutInAgent ? 4.5 : 2.5}
             transparent
-            opacity={0.35}
-            dashed
-            dashSize={0.8}
-            gapSize={0.6}
+            opacity={isCutInAgent ? 0.95 : 0.5}
+            dashed={!isCutInAgent}
+            dashSize={0.9}
+            gapSize={0.5}
           />
         );
       })}
     </group>
+  );
+}
+
+// --- 4c-ii. Predictive risk tint: a soft amber ground halo under the ego
+// while the prediction stage is running its comfort-bounded proactive
+// slowdown for a developing cut-in (speed_limit_reason "predictive_cut_in").
+// Distinct from ShieldOverrideIndicator's red emergency halo -- this fires
+// EARLIER and is not an override. ---
+function PredictiveRiskTint() {
+  const prediction = useSimulationStore((state) => state.prediction);
+  const ringRef = useRef<THREE.Mesh>(null);
+  const active = !!prediction && prediction.cut_in.active;
+
+  useFrame((state) => {
+    if (!ringRef.current) return;
+    ringRef.current.visible = active;
+    if (!active) return;
+    ringRef.current.position.x = sharedVehicleState.x;
+    ringRef.current.position.z = sharedVehicleState.z;
+    const pulse = (Math.sin(state.clock.elapsedTime * 5) + 1) / 2;
+    const p = prediction?.cut_in.probability ?? 0;
+    (ringRef.current.material as THREE.MeshBasicMaterial).opacity = 0.14 + pulse * 0.12 + p * 0.14;
+  });
+
+  return (
+    <mesh ref={ringRef} position={[0, 0.025, 0]} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
+      <ringGeometry args={[3.4, 9.0, 48]} />
+      <meshBasicMaterial color={THEME.detectedWarning} transparent opacity={0.2} side={THREE.DoubleSide} />
+    </mesh>
   );
 }
 
@@ -701,7 +732,8 @@ export function SimulationScene() {
             dimmed, with the actual chosen path highlighted -- the
             rider-app signature this phase is named for. */}
         <PlannerCandidatePaths />
-        <PredictedNpcPaths />
+        <PredictedAgentRibbons />
+        <PredictiveRiskTint />
         <ShieldOverrideIndicator />
 
         {/* Dynamic Vehicles */}
