@@ -1,5 +1,5 @@
 """
-Unit tests for app/services/planner.py -- P6-2's candidate lateral-offset
+Unit tests for app/services/planner.py -- the candidate lateral-offset
 scoring and pure-pursuit steering geometry.
 """
 import math
@@ -7,7 +7,9 @@ import pytest
 
 from app.services.planner import (
     LANE_CENTER_D_M,
+    ADJACENT_LANE_D_M,
     ROAD_HALF_WIDTH_M,
+    LANE_CHANGE_TRIGGER_GAP_M,
     generate_candidates,
     select_best_candidate,
     pure_pursuit_steering,
@@ -21,8 +23,13 @@ def test_lane_center_wins_with_no_lead_vehicle_and_already_centred():
 
 
 def test_candidates_near_the_road_edge_are_penalised():
-    candidates = generate_candidates(current_d=LANE_CENTER_D_M, lead_gap_m=None)
-    by_offset = {round(c.d_target - LANE_CENTER_D_M, 3): c for c in candidates}
+    # LANE_CENTER_D_M (the real near-lane centre, 1.75m) sits comfortably
+    # inside the 7m road edge, so exercise the edge-clearance penalty
+    # explicitly near the edge instead of relying on the ego's own default
+    # lane happening to be close to it.
+    near_edge_lane = ROAD_HALF_WIDTH_M - 1.0
+    candidates = generate_candidates(current_d=near_edge_lane, lead_gap_m=None, lane_center_d=near_edge_lane)
+    by_offset = {round(c.d_target - near_edge_lane, 3): c for c in candidates}
     # +2m candidate (closer to the 7m edge) must cost strictly more on safety
     # than the centred (0m) candidate.
     assert by_offset[2.0].safety_cost > by_offset[0.0].safety_cost
@@ -94,3 +101,52 @@ def test_pure_pursuit_steer_grows_with_sharper_offset_angle():
 
 def test_pure_pursuit_zero_lookahead_distance_returns_zero_steer():
     assert pure_pursuit_steering(0.0, 1.0, 1.0, 0.0, 2.8) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Real lane-change candidate: a genuine decision (not a fictional in-lane
+# wobble) that only exists once the lane is blocked AND the adjacent lane
+# is verified clear -- see BLOCKED_LANE_PENALTY's docstring for why.
+# ---------------------------------------------------------------------------
+
+def test_no_lane_change_candidate_when_lane_is_not_blocked():
+    candidates = generate_candidates(current_d=LANE_CENTER_D_M, lead_gap_m=None, adjacent_lane_clear=True)
+    assert not any(c.is_lane_change for c in candidates)
+
+
+def test_no_lane_change_candidate_when_gap_is_ample():
+    ample_gap = LANE_CHANGE_TRIGGER_GAP_M + 50.0
+    candidates = generate_candidates(current_d=LANE_CENTER_D_M, lead_gap_m=ample_gap, adjacent_lane_clear=True)
+    assert not any(c.is_lane_change for c in candidates)
+
+
+def test_no_lane_change_candidate_when_blocked_but_adjacent_lane_not_clear():
+    tight_gap = LANE_CHANGE_TRIGGER_GAP_M - 5.0
+    candidates = generate_candidates(current_d=LANE_CENTER_D_M, lead_gap_m=tight_gap, adjacent_lane_clear=False)
+    assert not any(c.is_lane_change for c in candidates)
+
+
+def test_lane_change_candidate_exists_when_blocked_and_adjacent_lane_clear():
+    tight_gap = LANE_CHANGE_TRIGGER_GAP_M - 5.0
+    candidates = generate_candidates(current_d=LANE_CENTER_D_M, lead_gap_m=tight_gap, adjacent_lane_clear=True)
+    lane_change = [c for c in candidates if c.is_lane_change]
+    assert len(lane_change) == 1
+    assert lane_change[0].d_target == pytest.approx(ADJACENT_LANE_D_M)
+
+
+def test_lane_change_candidate_wins_when_blocked_and_clear():
+    """The headline behaviour: once genuinely blocked with a verified-clear
+    adjacent lane, the planner must actually PREFER changing lanes, not
+    just generate the option and still pick an in-lane candidate."""
+    tight_gap = LANE_CHANGE_TRIGGER_GAP_M - 15.0
+    candidates = generate_candidates(current_d=LANE_CENTER_D_M, lead_gap_m=tight_gap, adjacent_lane_clear=True)
+    best = select_best_candidate(candidates)
+    assert best.is_lane_change is True
+
+
+def test_blocked_lane_penalty_applies_to_every_in_lane_candidate():
+    tight_gap = LANE_CHANGE_TRIGGER_GAP_M - 5.0
+    blocked = generate_candidates(current_d=LANE_CENTER_D_M, lead_gap_m=tight_gap, adjacent_lane_clear=False)
+    unblocked = generate_candidates(current_d=LANE_CENTER_D_M, lead_gap_m=None, adjacent_lane_clear=False)
+    for b, u in zip(sorted(blocked, key=lambda c: c.d_target), sorted(unblocked, key=lambda c: c.d_target)):
+        assert b.safety_cost > u.safety_cost

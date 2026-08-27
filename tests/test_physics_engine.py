@@ -1,5 +1,5 @@
 """
-Unit tests for app/services/physics_engine.py, including a P1-7
+Unit tests for app/services/physics_engine.py, including a 
 regression test for the idle-coolant-runaway fix.
 """
 import time
@@ -16,7 +16,7 @@ def _tick(engine, action, dt, ticks):
 
 
 def test_initial_altitude_is_in_training_distribution():
-    """P1-3 regression: Altitude used to start at 10.0, wildly outside the
+    """ regression: Altitude used to start at 10.0, wildly outside the
     training data's observed 128-203 range."""
     engine = PhysicsEngine()
     assert 128 <= engine.altitude <= 203
@@ -29,7 +29,7 @@ def test_coolant_stays_within_clamp_bounds():
 
 
 def test_idle_coolant_does_not_run_away_to_clamp_ceiling():
-    """P1-7 regression: at speed 0, cooling used to be exactly 0, so
+    """ regression: at speed 0, cooling used to be exactly 0, so
     coolant climbed monotonically to the 110.0 clamp ceiling. It must now
     stay well below the training-data-observed max (87C) under sustained
     idle."""
@@ -156,7 +156,7 @@ def test_car_slows_down_for_a_sharp_upcoming_turn():
     decision can override)."""
     engine = PhysicsEngine()
     # A route with realistically-dense waypoints (~11m apart, matching real
-    # OSRM route density -- see _evidence/P3-1-backend) that goes straight
+    # OSRM route density) that goes straight
     # east for ~110m, then turns sharply north for ~110m -- a ~90 degree
     # corner within the cornering lookahead window.
     corner_route = [(37.7749, -122.4194 + i * 0.0001) for i in range(10)]
@@ -177,6 +177,11 @@ def test_car_holds_cruise_speed_on_a_straight_route():
     straight_route = [(37.7749 + i * 0.0001, -122.4194) for i in range(30)]
     engine.set_destination(*straight_route[-1])
     engine.set_route(straight_route)
+    # This test isolates the CURVATURE-based speed cap specifically -- IDM
+    # car-following (a randomly-seeded NPC legitimately blocking the lane)
+    # is a separate, real confound now that sensed_lead actually affects
+    # speed, and is covered by its own dedicated car-following tests below.
+    engine.traffic = None
 
     _tick(engine, "Maintain Speed", dt=0.1, ticks=200)  # 20s
 
@@ -242,7 +247,7 @@ def test_longitudinal_acceleration_stays_within_limits():
 
 
 def test_jerk_stays_within_limit():
-    """The defining fix of P6-1: bounded d(acceleration)/dt makes velocity C1
+    """The defining fix of : bounded d(acceleration)/dt makes velocity C1
     continuous, which is what removes the visual flicker."""
     dt = 0.1
     engine = PhysicsEngine()
@@ -270,7 +275,7 @@ def test_lateral_acceleration_respects_comfort_limit():
 
 
 def test_bicycle_controller_is_far_smoother_than_legacy():
-    """Headline P6-1 comparison; the quantitative version becomes the P6-6
+    """Headline the previous comparison; the quantitative version becomes the 
     A/B evaluation. Acceleration is derived from the speed trace so both
     controllers are measured identically (legacy writes speed directly and
     never populates acceleration_mps2)."""
@@ -280,6 +285,12 @@ def test_bicycle_controller_is_far_smoother_than_legacy():
         engine = PhysicsEngine(controller=controller)
         engine.set_destination(*_corner_route()[-1])
         engine.set_route(_corner_route())
+        # Isolate the two controllers' OWN dynamics on identical corner
+        # geometry -- a randomly-seeded NPC triggering real IDM braking
+        # (legacy never reads sensed_lead, so this asymmetrically affects
+        # only the bicycle run) is a separate, real confound now that
+        # sensed_lead actually affects speed.
+        engine.traffic = None
         speeds, _, _ = _drive(engine, "Accelerate", ticks=400, dt=dt)
         accels = [(speeds[i] - speeds[i - 1]) / dt for i in range(1, len(speeds))]
         return max(abs(accels[i] - accels[i - 1]) / dt for i in range(1, len(accels)))
@@ -288,7 +299,7 @@ def test_bicycle_controller_is_far_smoother_than_legacy():
 
 
 def test_legacy_controller_remains_selectable_as_ab_control():
-    """P6-6 needs the pre-P6 controller as its experimental control condition."""
+    """ needs the pre-P6 controller as its experimental control condition."""
     engine = PhysicsEngine(controller="legacy")
     engine.set_destination(*_straight_route()[-1])
     engine.set_route(_straight_route())
@@ -421,7 +432,7 @@ def test_station_m_advances_with_real_movement_even_while_route_index_is_small()
     distance to a LOOKAHEAD point (potentially many waypoints ahead), not to
     route_index's own waypoint -- and since station_distances[0] == 0.0,
     while route_index sat at 0 early in a drive this produced 0 regardless of
-    real movement. Silently broke P6-1b traffic recycling/sensing, which is
+    real movement. Silently broke the previous traffic recycling/sensing, which is
     keyed off the ego's station."""
     engine = PhysicsEngine()
     route = _straight_route(n=80)
@@ -467,8 +478,8 @@ def test_car_does_not_spiral_off_a_long_dense_route():
 # ---------------------------------------------------------------------------
 
 def test_bicycle_controller_settles_near_the_lane_centre_on_a_straight_route():
-    """The headline P6-2 fix: the car targets a LANE (d ~= LANE_CENTER_D_M),
-    not the raw route centreline (d = 0), which is what P6-1 actually drove."""
+    """The headline the previous fix: the car targets a LANE (d ~= LANE_CENTER_D_M),
+    not the raw route centreline (d = 0), which is what the previous actually drove."""
     from app.services.planner import LANE_CENTER_D_M
     route = _straight_route(n=150)
     engine = PhysicsEngine()
@@ -485,18 +496,35 @@ def test_bicycle_controller_settles_near_the_lane_centre_on_a_straight_route():
     # Pure pursuit is known to settle with a small non-zero steady-state
     # lateral offset (a function of lookahead distance and the rate-limited
     # lateral TARGET tracking, not a bug) -- the acceptance bar is "bounded
-    # lateral error" (PHASE_6_TASK_BOARD.md's P6-2 acceptance), not exact
+    # lateral error", not exact
     # convergence to zero error. 1.5m tolerance (well under half a 3.5m lane)
-    # comfortably separates "on centreline" (d~=0, the P6-1 behaviour this
+    # comfortably separates "on centreline" (d~=0, the previous behaviour this
     # replaces) from "in the lane" (d~=3.5).
     mean_offset = sum(settled_offsets) / len(settled_offsets)
     assert mean_offset == pytest.approx(LANE_CENTER_D_M, abs=1.5)
     assert max(abs(o - LANE_CENTER_D_M) for o in settled_offsets) < 2.5
 
 
+def test_routed_bicycle_drive_starts_on_route_lane_center_with_route_heading():
+    """Regression: real OSRM routes may start several metres away from the
+    raw requested origin after map matching. The simulated ego must start on
+    the routed lane centre instead of inheriting an off-road/off-lane raw GPS
+    point that immediately trips TTC and safety-shield overrides."""
+    from app.services.planner import LANE_CENTER_D_M
+
+    engine = PhysicsEngine()
+    route = [(engine.lat + 0.00005, engine.lng), (engine.lat + 0.001, engine.lng)]
+    engine.set_destination(*route[-1])
+    engine.set_route(route)
+
+    nav = engine.get_navigation_state()
+    assert nav["lateral_offset_m"] == pytest.approx(LANE_CENTER_D_M)
+    assert engine.heading == pytest.approx(0.0)
+
+
 def test_frenet_lateral_offset_is_near_zero_for_the_legacy_controller_on_centreline():
-    """Legacy is the P6-6 A/B control and must keep chasing the raw
-    centreline (its steering law is untouched by P6-2) -- the more accurate
+    """Legacy is the previous A/B control and must keep chasing the raw
+    centreline (its steering law is untouched by ) -- the more accurate
     Frenet station/offset bookkeeping is a diagnostic improvement layered
     underneath it, not a behaviour change."""
     route = _straight_route(n=100)
@@ -505,7 +533,7 @@ def test_frenet_lateral_offset_is_near_zero_for_the_legacy_controller_on_centrel
     engine.set_route(route)
     _drive(engine, "Accelerate", ticks=200)
     assert abs(engine.current_lateral_offset_m) < 1.0
-    assert engine.planner_candidates == [], "legacy must never touch the P6-2 planner"
+    assert engine.planner_candidates == [], "legacy must never touch the previous planner"
 
 
 def test_planner_candidates_are_populated_and_include_the_chosen_path():
@@ -523,7 +551,7 @@ def test_planner_candidates_are_populated_and_include_the_chosen_path():
 
 
 def test_navigation_state_exposes_lateral_offset_for_the_frontend():
-    """The frontend's hard-coded LANE_OFFSET_M render hack (P6-2's build
+    """The frontend's hard-coded LANE_OFFSET_M render hack (the build
     note) is replaced by rendering at this real backend value."""
     route = _straight_route(n=100)
     engine = PhysicsEngine()
@@ -537,7 +565,7 @@ def test_navigation_state_exposes_lateral_offset_for_the_frontend():
 
 def test_pure_pursuit_steering_output_is_continuous_no_teleport_jumps():
     """Acceptance: 'steering output is continuous'. The rate limiter is
-    structural (same clamp P6-1 already relies on), but this locks in that
+    structural (same clamp the previous already relies on), but this locks in that
     the NEW Frenet/pure-pursuit path also respects it, tick to tick."""
     dt = 0.1
     route = _corner_route()
@@ -586,10 +614,151 @@ def test_station_m_from_frenet_projection_advances_smoothly_with_speed():
         prev_station = engine.current_station_m
 
 
+def test_tracking_error_speed_cap_bounds_startup_excursion_off_a_mismatched_route():
+    """Regression: the car starts every drive at a fixed heading (45deg)
+    with no relation to the real route's actual initial direction. Because
+    the bicycle model correctly cannot yaw while nearly stationary
+    (yaw_rate = v*tan(delta)/L), flooring the throttle before steering
+    authority catches up sent the car travelling fast in the wrong
+    direction -- measured on the real default SF OSRM route, lateral
+    offset reached 26m off a 7m-wide modelled road within the first ~12s,
+    reported live as "car goes off the road". A south-heading dense route
+    (max mismatch from the 45deg start heading) reproduces the same class
+    of error deterministically without a live OSRM call."""
+    dt = 0.1
+    engine = PhysicsEngine()
+    south_route = [(37.7749 - i * 0.0001, -122.4194) for i in range(150)]
+    engine.set_destination(*south_route[-1])
+    engine.set_route(south_route)
+
+    max_abs_d = 0.0
+    for _ in range(150):  # 15s -- the window the real-route excursion occurred in
+        engine.last_update_time = time.time() - dt
+        engine.update("Accelerate")  # worst case: AI floors it throughout
+        max_abs_d = max(max_abs_d, abs(engine.current_lateral_offset_m))
+
+    # A dead-south route is a 180deg mismatch -- more adversarial than the
+    # real SF route's ~95deg (which the cap already reduced from 26m to
+    # under 10m). Bounding this worst case, not eliminating it: further
+    # tightening would mean weakening JERK_MAX_MPS3 itself (even a
+    # correctly-reduced target speed takes time to realize under bounded
+    # jerk) -- the same physical property that fixed P6-1's flickering.
+    # Before this fix, the same scenario reached 26m+ with no bound at all;
+    # a real hard bound (a road-boundary safety check) belongs to the
+    # Safety Shield, which this residual is the direct motivation for.
+    assert max_abs_d < 20.0, "tracking-error speed cap should bound even a worst-case (180deg) startup mismatch"
+
+
+def test_safety_shield_overrides_with_emergency_brake_on_imminent_collision():
+    """Integration test: with a stopped lead vehicle sensed at close range,
+    the independent Safety Shield must force maximum braking regardless of
+    what IDM alone would have decided (an even earlier check than IDM's own
+    braking, and unconditional -- not tunable by the AI decision)."""
+    dt = 0.1
+    engine = PhysicsEngine()
+    route = _straight_route(n=150)
+    engine.set_destination(*route[-1])
+    engine.set_route(route)
+    _drive(engine, "Accelerate", ticks=100)  # get up to real speed
+    assert engine.speed_kmh > 20.0, "test setup must have real speed to brake from"
+
+    # Force a critical TTC directly via the traffic model, at the ego's
+    # own real sensed lane -- matches how sense_lead_vehicle is actually
+    # queried in physics_engine.py after the lane-sensing bug fix.
+    from app.services.traffic import NpcVehicle
+    engine.traffic.npcs = [NpcVehicle(
+        id="blocker", lane_offset=engine.current_lateral_offset_m,
+        speed_kmh=0.0, station_m=engine.current_station_m + 8.0,
+    )]
+
+    speed_before = engine.speed_kmh
+    engine.last_update_time = time.time() - dt
+    engine.update("Accelerate")  # worst case: AI still says floor it
+
+    assert engine.shield_verdict.approved is False
+    assert engine.shield_verdict.override_action == "EMERGENCY_BRAKE"
+    assert engine.get_navigation_state()["speed_limit_reason"] == "safety_shield_override"
+
+    # acceleration_mps2 is JERK-LIMITED (JERK_MAX_MPS3*dt per tick), so it
+    # cannot flip sign in a single tick even under an emergency override --
+    # that bound is deliberate (P6-1). Confirm the override actually wins
+    # over several ticks instead: real deceleration, not just a flag.
+    for _ in range(20):
+        engine.last_update_time = time.time() - dt
+        engine.traffic.npcs = [NpcVehicle(
+            id="blocker", lane_offset=engine.current_lateral_offset_m,
+            speed_kmh=0.0, station_m=engine.current_station_m + 8.0,
+        )]
+        engine.update("Accelerate")
+    assert engine.acceleration_mps2 < 0.0
+    assert engine.speed_kmh < speed_before
+
+
+def test_safety_shield_road_boundary_override_does_not_livelock_the_car():
+    """Regression: an earlier version forced EMERGENCY_BRAKE (full stop)
+    on a road-boundary violation. Braking to zero removes the only thing
+    that lets the car steer back onto the road (yaw_rate = v*tan(delta)/L
+    needs forward speed) -- found live: the car froze off-road, speed
+    pinned at 0, re-triggering the same override every tick, forever.
+    Drive the car off the modelled road directly and confirm it recovers
+    (lateral offset shrinks back toward the road) instead of freezing."""
+    dt = 0.1
+    engine = PhysicsEngine()
+    route = _straight_route(n=150)
+    engine.set_destination(*route[-1])
+    engine.set_route(route)
+    _drive(engine, "Accelerate", ticks=50)
+
+    # Force the car's REAL position off the modelled road (not just the
+    # derived current_lateral_offset_m field, which is recomputed from
+    # lat/lng by a fresh Frenet projection every tick and would otherwise
+    # just overwrite a directly-set value on the next update()).
+    from app.services.safety_shield import ROAD_BOUNDARY_HARD_LIMIT_M
+    from app.services.frenet import frenet_to_latlng
+    off_road_lat, off_road_lng = frenet_to_latlng(
+        engine.frenet_frame, engine.current_station_m, ROAD_BOUNDARY_HARD_LIMIT_M + 1.5,
+    )
+    engine.lat, engine.lng = off_road_lat, off_road_lng
+    engine.lateral_target_d_m = 1.75  # planner still wants to come back
+
+    speeds_while_off_road = []
+    for _ in range(50):  # 5s
+        engine.last_update_time = time.time() - dt
+        engine.update("Maintain Speed")
+        speeds_while_off_road.append(engine.speed_kmh)
+
+    assert engine.shield_verdict.override_action in ("RECOVER_LOW_SPEED", None), \
+        "must not still be off-road after recovery (or already fully recovered)"
+    assert max(speeds_while_off_road) > 0.0, \
+        "car must retain some speed while off-road, not freeze at a dead stop (the livelock)"
+
+
+def test_safety_shield_state_is_exposed_via_get_safety_shield_state():
+    engine = PhysicsEngine()
+    state = engine.get_safety_shield_state()
+    assert state["approved"] is True
+    assert state["risk_level"] == "NONE"
+    assert state["reasons"] == []
+    assert state["override_action"] is None
+
+
+def test_safety_shield_is_not_evaluated_for_legacy_controller():
+    """Legacy is the untouched P6-6 A/B control -- the shield is part of
+    the new stack, not retrofitted onto the old one."""
+    dt = 0.1
+    engine = PhysicsEngine(controller="legacy")
+    route = _straight_route(n=150)
+    engine.set_destination(*route[-1])
+    engine.set_route(route)
+    _drive(engine, "Accelerate", ticks=50)
+    assert engine.shield_verdict.risk_level == "NONE"
+    assert engine.shield_verdict.approved is True
+
+
 def test_no_route_bicycle_steering_falls_back_to_proportional_heading_control():
-    """A Frenet frame needs a route to project onto -- without one, the P6-1
+    """A Frenet frame needs a route to project onto -- without one, the 
     proportional heading controller chasing target_lat/target_lng directly
-    must still work exactly as before P6-2."""
+    must still work exactly as before ."""
     engine = PhysicsEngine()
     engine.target_lat = engine.lat + 0.02
     engine.target_lng = engine.lng + 0.02

@@ -1,9 +1,9 @@
 """
-Frenet (station-lateral) frame utilities for P6-2's local planner.
+Frenet (station-lateral) frame utilities for the local planner.
 
 `current_station_m`  and its `station_distances[route_index]`
 approximation were always a stopgap -- accurate only to within one
-inter-waypoint spacing, and P6-1b's own comment said as much: "P6-2's proper
+inter-waypoint spacing, and the own comment said as much: "the proper
 Frenet frame will replace this with exact segment projection." This module
 is that replacement: an exact perpendicular projection of the ego's real
 position onto the route polyline, giving a continuous signed lateral offset
@@ -24,12 +24,14 @@ lane, right-hand traffic) and the frontend's `RoadMesh`/`SimulatedTraffic`
 `right = (dir.z, 0, -dir.x)` offset vector. If this module's `d` sign ever
 disagreed with those, the ego, the NPCs, and the road-edge rendering would
 each be using a different idea of "which side is which" -- exactly the class
-of backend/frontend disagreement P6-1b's station bug and P6-1d's smoothing
+of backend/frontend disagreement the station bug and the smoothing
 work were about.
 """
 import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+
+import numpy as np
 
 EARTH_RADIUS_M = 6371000.0
 
@@ -64,7 +66,7 @@ def build_frenet_frame(route: List[Tuple[float, float]]) -> Optional[FrenetFrame
     """route: the SAME smoothed waypoint list PhysicsEngine.route already
     holds (post path_smoothing.smooth_route) -- projecting against the
     smoothed route, not the raw OSRM polyline, is what gives Frenet a
-    well-conditioned (non-faceted) frame to work in, per P6-1d."""
+    well-conditioned (non-faceted) frame to work in."""
     if not route or len(route) < 2:
         return None
     origin_lat, origin_lng = route[0]
@@ -89,7 +91,7 @@ def project_to_frenet(
 
     search_start_idx/search_window bound the search to segments at or ahead
     of the caller's last known position (same windowed-search principle
-    P6-1's route_index projection already uses) -- projecting against the
+    the route_index projection already uses) -- projecting against the
     whole route every tick would be wasteful and, worse, could snap onto a
     geometrically-nearby-but-wrong part of a route that loops back on
     itself."""
@@ -154,3 +156,46 @@ def frenet_to_local_xz(frame: FrenetFrame, s: float, d: float) -> Tuple[float, f
 def frenet_to_latlng(frame: FrenetFrame, s: float, d: float) -> Tuple[float, float]:
     x, z, _, _ = frenet_to_local_xz(frame, s, d)
     return local_to_latlng(x, z, frame.origin_lat, frame.origin_lng)
+
+
+def frenet_to_local_xz_batch(
+    frame: FrenetFrame,
+    stations,
+    offsets,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorized frenet_to_local_xz for many (s, d) pairs against the SAME
+    frame at once -- used by app/services/perception's per-tick hot loop
+    over many actors (Gate 6.3's <2ms/tick @ 30-actor budget), where the
+    scalar version's per-call Python overhead, paid once per actor, was a
+    meaningful share of the total. Segment selection uses np.searchsorted
+    (side='left', then idx-1) instead of the scalar version's linear scan;
+    it picks the exact same segment index for every input -- verified by
+    tests/test_perception.py's cross-check against the scalar function, not
+    just assumed equivalent."""
+    station_arr = np.asarray(frame.station, dtype=float)
+    points = np.asarray(frame.points_xz, dtype=float)  # (n, 2)
+    n = len(station_arr)
+
+    s = np.clip(np.asarray(stations, dtype=float), 0.0, station_arr[-1])
+    idx = np.searchsorted(station_arr, s, side="left") - 1
+    idx = np.clip(idx, 0, max(n - 2, 0))
+
+    a = points[idx]        # (m, 2)
+    b = points[idx + 1]     # (m, 2)
+    seg_len = station_arr[idx + 1] - station_arr[idx]
+    safe_seg_len = np.where(seg_len > 1e-9, seg_len, 1.0)
+    t = np.where(seg_len > 1e-9, (s - station_arr[idx]) / safe_seg_len, 0.0)
+
+    d_vec = b - a
+    dir_len = np.hypot(d_vec[:, 0], d_vec[:, 1])
+    degenerate = dir_len < 1e-9
+    safe_dir_len = np.where(degenerate, 1.0, dir_len)
+    dir_x = np.where(degenerate, 0.0, d_vec[:, 0] / safe_dir_len)
+    dir_z = np.where(degenerate, 1.0, d_vec[:, 1] / safe_dir_len)
+
+    c = a + t[:, None] * d_vec
+    right_x, right_z = dir_z, -dir_x
+    d_arr = np.asarray(offsets, dtype=float)
+    x = c[:, 0] + d_arr * right_x
+    z = c[:, 1] + d_arr * right_z
+    return x, z, dir_x, dir_z

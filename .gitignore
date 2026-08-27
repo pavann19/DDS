@@ -12,8 +12,14 @@ htmlcov/
 *.pkl
 anomaly_feature_bounds.json
 feature_info.json
-optimal_features.json
 metrics.json
+
+# optimal_features.json is the ONE exception: it is genetic_optimizer.py's
+# exhaustive-search result, which is not reproducible run-to-run (tie
+# breaks), and model_pipeline.py + the inference tests depend on the exact
+# subset. So it is committed as pinned config -- small, diffable, reviewed
+# on change -- and CI regenerates every other artifact from it.
+!optimal_features.json
 
 # Processed/derived data (regenerate via data_prep.py)
 processed_telemetry.csv
@@ -38,6 +44,7 @@ THESIS_PLAN.md
 PHASE*_TASK_BOARD.md
 _context_packs/
 _evidence/
+output/
 
 # AI tool configs
 .claude/

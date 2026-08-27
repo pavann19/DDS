@@ -3,7 +3,7 @@ Road-following route fetching for the physics simulation.
 
 Uses the free OSRM public demo API (router.project-osrm.org) to turn an
 origin/destination pair into a real sequence of road-following waypoints,
-instead of the straight-line bearing the physics engine used before P3-1.
+instead of the straight-line bearing the physics engine used before .
 This is a public, rate-limited demo service (not meant for production
 traffic) -- acceptable for this project's scope, but any failure (network
 error, timeout, non-OK route response) must fail soft: the caller falls

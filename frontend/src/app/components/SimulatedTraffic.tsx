@@ -52,8 +52,8 @@ function getPathPosAtDistance(dist: number, routeData: { points: THREE.Vector3[]
 }
 
 // NPC state (id, lane_offset, speed_kmh, station_m) is authoritative on the
-// backend (app/services/traffic.py, P6-1b) and streamed over the WS "npcs"
-// field every tick (P6-1c) -- this component now RENDERS that state, it
+// backend (app/services/traffic.py, ) and streamed over the WS "npcs"
+// field every tick  -- this component now RENDERS that state, it
 // does not invent it. Positions are derived from station_m via the same
 // route-distance parameterization the backend uses (station-latitude), so
 // frontend and backend agree on where each NPC actually is. Recycling
@@ -103,7 +103,7 @@ function NpcCar({ id, routeData, npc, npcMeshRefs }: { id: string, routeData: an
     pos.add(right.multiplyScalar(npc.lane_offset));
 
     // Expose the real Object3D for SensorRays' raycasting against actual
-    // geometry (P6-1c/P6-2) -- the only thing anything still reads.
+    // geometry (/) -- the only thing anything still reads.
     if (npcMeshRefs && npcMeshRefs.current && groupRef.current) {
       npcMeshRefs.current[id] = groupRef.current;
     }
