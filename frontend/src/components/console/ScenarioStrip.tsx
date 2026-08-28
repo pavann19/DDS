@@ -3,8 +3,10 @@
 import React, { useEffect, useState } from 'react';
 import { Play, Pause, StepForward, RotateCcw, Navigation } from 'lucide-react';
 import { useSimulationStore } from '../../store/useSimulationStore';
+import { useEvents } from '../../store/useEvents';
 import type { ScenarioSummary } from '../../types/protocol';
 import { Chip } from '../primitives';
+import { EventTimeline } from './EventTimeline';
 
 /* The bottom strip (ADR-002 item 7): scenario state · transport · quick
  * scenario pick · destination. One mono row, DDS tokens only — folds in
@@ -50,6 +52,7 @@ export function ScenarioStrip() {
   const resetSimulation = useSimulationStore((s) => s.resetSimulation);
   const sendCommand = useSimulationStore((s) => s.sendCommand);
 
+  const hasEvents = useEvents((s) => s.events.length > 0);
   const [dest, setDest] = useState<string | null>(null);
 
   useEffect(() => {
@@ -158,12 +161,14 @@ export function ScenarioStrip() {
 
       <span style={{ flex: 1 }} />
 
-      {/* milestone */}
-      {scenario?.milestone && (
+      {/* latest operational event (real scenario stream), else milestone */}
+      {hasEvents ? (
+        <EventTimeline variant="ticker" />
+      ) : scenario?.milestone ? (
         <span style={{ color: 'var(--brand)', fontSize: 10, maxWidth: 260, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           ◆ {scenario.milestone}
         </span>
-      )}
+      ) : null}
 
       {/* destination */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
