@@ -5,6 +5,7 @@ import { useTelemetry } from '../hooks/useTelemetry';
 import { useSimulationStore } from '../store/useSimulationStore';
 import { SimulationScene } from '../components/3d/SimulationScene';
 import { ConsoleLayout } from '../components/console/ConsoleLayout';
+import { DriveHUD } from '../components/hud/DriveHUD';
 
 export default function Home() {
   const { sendCommand } = useTelemetry('ws://localhost:8000/ws/telemetry');
@@ -22,9 +23,8 @@ export default function Home() {
       {/* The 3D stage is always mounted, behind the console overlay. */}
       <SimulationScene />
 
-      {/* One console surface (ADR-002). hud / rail / strip land in
-          items 3–7; for now the shell renders the stage + top bar. */}
-      <ConsoleLayout />
+      {/* One console surface (ADR-002). rail / strip land in items 5–7. */}
+      <ConsoleLayout hud={<DriveHUD />} />
     </main>
   );
 }
