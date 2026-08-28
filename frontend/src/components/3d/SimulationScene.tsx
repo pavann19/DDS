@@ -13,6 +13,10 @@ import {
   getWorldPosAtFrenet,
   sampleFrenetCorridor,
 } from '../../lib/routeGeometry';
+import { annotateTracks, ROLE_LABEL, type AnnotatedTrack, type TrackRole } from '../../lib/roles';
+
+// Shared GPU resources — created once, never per-frame or per-track.
+const UNIT_EDGES = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
 
 // Real pixel-width lines: native THREE.Line/lineBasicMaterial's `linewidth`
 // is capped at 1px on most GPUs/browsers (a long-standing WebGL
@@ -257,8 +261,7 @@ function EgoVehicle() {
       </mesh>
 
       {/* Dynamic Ego Perception Box */}
-      <lineSegments position={[0, 0.55, 0]}>
-        <edgesGeometry args={[new THREE.BoxGeometry(2.15, 1.35, 4.5)]} />
+      <lineSegments geometry={UNIT_EDGES} scale={[2.15, 1.35, 4.5]} position={[0, 0.55, 0]}>
         <lineBasicMaterial color={THEME.brandCyan} />
       </lineSegments>
     </group>
@@ -367,8 +370,7 @@ function NpcVehicle({ worldPos, worldHeadingRad, isDetected, perceptionInfo }: {
       </mesh>
 
       {/* Detected 3D Bounding Box */}
-      <lineSegments position={[0, 0.55, 0]}>
-        <edgesGeometry args={[new THREE.BoxGeometry(2.05, 1.3, 4.3)]} />
+      <lineSegments geometry={UNIT_EDGES} scale={[2.05, 1.3, 4.3]} position={[0, 0.55, 0]}>
         <lineBasicMaterial ref={registerMaterial} transparent color={boxColor} />
       </lineSegments>
 
@@ -628,76 +630,112 @@ function HighwayRoad() {
 }
 
 // --- 5b. Surround perception tracks (heavy.surround_perception): the
-// ego's own 360-degree sensor-resolved picture -- confirmed tracks only,
-// rendered as a wireframe box at the track's real dims plus a
-// camera-facing label card (class - range - closing speed). This is the
-// Waymo "what the car sees" layer, drawn from the SAME field the
-// Perception panel reads, never from raw NPC ground truth. ---
-const TRACK_CLASS_COLOR: Record<string, string> = {
-  SEDAN: THEME.brandCyan,
-  SUV: THEME.brandCyan,
-  TRUCK: '#8B5CF6',
-  MOTORCYCLE: THEME.detectedWarning,
-  BICYCLE: THEME.detectedWarning,
-  PEDESTRIAN: THEME.detectedSafe,
-  TRAFFIC_CONE: THEME.laneYellow,
+// ego's own 360-degree sensor-resolved picture -- confirmed tracks only.
+// Each track carries a *semantic role* (lib/roles.ts) derived from real
+// state (the sensor's own lead call, the Phase 7 cut_in.track_id, the
+// track's own class/kinematics) and a *relevance tier* that drives a
+// three-level visual hierarchy: primary tracks get a solid box + full
+// role card + ground ring; ambient tracks are a faint wire outline only.
+// Same honesty boundary as the rest of the scene -- no map, no crosswalks,
+// no signals; a track that matches no rule is just "tracked". ---
+const ROLE_COLOR: Record<TrackRole, string> = {
+  'cut-in': THEME.detectedCritical,
+  lead: THEME.brandCyan,
+  oncoming: '#A78BFA',
+  adjacent: THEME.detectedWarning,
+  pedestrian: THEME.detectedWarning,
+  cyclist: THEME.detectedWarning,
+  static: '#64748B',
+  tracked: '#64748B',
 };
 
-function SurroundTrackBox({ track }: { track: import('../../types/protocol').SurroundTrack }) {
+function SurroundTrackBox({ a }: { a: AnnotatedTrack }) {
   const groupRef = useRef<THREE.Group>(null);
+  const { track, role, relevance, closingMps, speedMps } = a;
   const [len, wid, hei] = track.dims;
-  const color = TRACK_CLASS_COLOR[track.class] ?? '#64748B';
+  const color = ROLE_COLOR[role];
   const heading = Math.atan2(track.vx, -track.vz);
-  const closing = -(track.vx * Math.sin(track.azimuth_deg * Math.PI / 180) +
-    track.vz * Math.cos(track.azimuth_deg * Math.PI / 180));
+
+  const boxOpacity = relevance === 'primary' ? 0.92 : relevance === 'secondary' ? 0.5 : 0.2;
 
   useFrame((_, delta) => {
     if (!groupRef.current) return;
-    const a = Math.min(1, delta * 12);
-    groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, track.x, a);
-    groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, track.z, a);
-    groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, -heading, a);
+    const k = Math.min(1, delta * 12);
+    groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, track.x, k);
+    groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, track.z, k);
+    groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, -heading, k);
   });
 
   return (
     <group ref={groupRef} position={[track.x, 0.02, track.z]}>
-      <lineSegments position={[0, hei / 2, 0]}>
-        <edgesGeometry args={[new THREE.BoxGeometry(wid, hei, len)]} />
-        <lineBasicMaterial color={color} transparent opacity={0.85} />
+      <lineSegments geometry={UNIT_EDGES} scale={[wid, hei, len]} position={[0, hei / 2, 0]}>
+        <lineBasicMaterial color={color} transparent opacity={boxOpacity} />
       </lineSegments>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
-        <ringGeometry args={[Math.max(wid, len) * 0.6, Math.max(wid, len) * 0.66, 24]} />
-        <meshBasicMaterial color={color} transparent opacity={0.35} side={THREE.DoubleSide} />
-      </mesh>
-      <Html position={[0, hei + 0.5, 0]} center distanceFactor={20} zIndexRange={[90, 0]}>
-        <div className="pointer-events-none select-none flex flex-col items-center">
-          <div
-            className="px-2 py-0.5 rounded text-[10px] font-mono tracking-wide whitespace-nowrap border"
-            style={{
-              color: 'var(--text-bright)',
-              background: 'var(--bg-frost)',
-              borderColor: color,
-              backdropFilter: 'blur(4px)',
-            }}
-          >
-            {track.class.toLowerCase()} · {track.range_m.toFixed(0)}m
-            {Number.isFinite(closing) && (
-              <span style={{ opacity: 0.7 }}> · {closing > 0 ? '+' : ''}{closing.toFixed(1)}m/s</span>
-            )}
+
+      {relevance === 'primary' && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+          <ringGeometry args={[Math.max(wid, len) * 0.62, Math.max(wid, len) * 0.7, 24]} />
+          <meshBasicMaterial color={color} transparent opacity={0.4} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+
+      {relevance !== 'ambient' && (
+        <Html position={[0, hei + 0.5, 0]} center distanceFactor={relevance === 'primary' ? 22 : 16} zIndexRange={[90, 0]}>
+          <div className="pointer-events-none select-none flex flex-col items-center">
+            <div
+              className="px-2 py-0.5 rounded text-[10px] font-mono tracking-wide whitespace-nowrap border"
+              style={{
+                color: 'var(--text-bright)',
+                background: 'var(--bg-frost)',
+                borderColor: color,
+                backdropFilter: 'blur(4px)',
+              }}
+            >
+              <span style={{ color, fontWeight: 600 }}>{ROLE_LABEL[role]}</span>
+              <span style={{ color: 'var(--text-faint)' }}> · {track.range_m.toFixed(0)}m</span>
+              {relevance === 'primary' && (
+                <>
+                  {Number.isFinite(closingMps) && (
+                    <span style={{ opacity: 0.75 }}>
+                      {' · '}
+                      {closingMps > 0 ? '▼' : '▲'}
+                      {Math.abs(closingMps).toFixed(1)}
+                    </span>
+                  )}
+                  <span style={{ opacity: 0.5 }}> · {(speedMps * 3.6).toFixed(0)}km/h</span>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      </Html>
+        </Html>
+      )}
     </group>
   );
 }
 
 function SurroundPerceptionLayer() {
   const tracks = useSimulationStore((state) => state.surroundPerception);
-  if (!tracks || tracks.length === 0) return null;
+  const prediction = useSimulationStore((state) => state.prediction);
+  const perception = useSimulationStore((state) => state.perception);
+  const planner = useSimulationStore((state) => state.planner);
+  const ego = useSimulationStore((state) => state.ego);
+
+  const annotated = useMemo(() => {
+    if (!tracks || tracks.length === 0) return [];
+    return annotateTracks(tracks, {
+      egoHeadingRad: sharedVehicleState.headingRad,
+      prediction,
+      perception,
+      egoLateralM: ego?.frenet?.d ?? 0,
+      laneChanging: Boolean(planner?.is_changing_lane),
+    });
+  }, [tracks, prediction, perception, planner, ego]);
+
+  if (annotated.length === 0) return null;
   return (
     <group>
-      {tracks.map((t) => (
-        <SurroundTrackBox key={t.id} track={t} />
+      {annotated.map((a) => (
+        <SurroundTrackBox key={a.track.id} a={a} />
       ))}
     </group>
   );
