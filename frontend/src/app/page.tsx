@@ -5,6 +5,7 @@ import { useTelemetry } from '../hooks/useTelemetry';
 import { useSimulationStore } from '../store/useSimulationStore';
 import { SimulationScene } from '../components/3d/SimulationScene';
 import { ConsoleLayout } from '../components/console/ConsoleLayout';
+import { Rail } from '../components/console/RailPanels';
 import { DriveHUD } from '../components/hud/DriveHUD';
 
 export default function Home() {
@@ -23,8 +24,8 @@ export default function Home() {
       {/* The 3D stage is always mounted, behind the console overlay. */}
       <SimulationScene />
 
-      {/* One console surface (ADR-002). rail / strip land in items 5–7. */}
-      <ConsoleLayout hud={<DriveHUD />} />
+      {/* One console surface (ADR-002). strip lands in item 7. */}
+      <ConsoleLayout hud={<DriveHUD />} rail={<Rail />} />
     </main>
   );
 }
