@@ -83,6 +83,20 @@ function headingToForwardInto(out: THREE.Vector3, headingRad: number): THREE.Vec
 const FWD_A = new THREE.Vector3();
 const FWD_B = new THREE.Vector3();
 
+// Real vehicles don't pivot on the spot. Ease `current` heading (rad)
+// toward `target` along the SHORTEST arc, but never faster than a real
+// car's yaw rate -- this is what stops NPCs "spinning like toys" when a
+// station step lands them a big heading delta (route recycles, residual
+// corner kinks, the +/-180 deg seam).
+const MAX_YAW_RATE = 1.6; // rad/s (~92 deg/s) — covers hard cornering, kills spins
+function approachHeading(current: number, target: number, alpha: number, dt: number): number {
+  let diff = target - current;
+  diff = ((diff + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+  const eased = diff * alpha;
+  const cap = MAX_YAW_RATE * Math.max(dt, 1 / 120);
+  return current + Math.max(-cap, Math.min(cap, eased));
+}
+
 function useRouteGeometry(): RouteGeometry | null {
   const routeWaypoints = useSimulationStore((state) => state.routeWaypoints);
   return useMemo(() => buildRouteGeometry(routeWaypoints), [routeWaypoints]);
@@ -307,14 +321,9 @@ function EgoVehicle() {
     groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, targetZ, alpha);
     groupRef.current.position.y = 0.4;
 
-    // Shortest-path heading lerp (through +/-180deg wrap), not a raw
-    // rotation.y lerp -- a naive lerp spins the long way round whenever
-    // the heading crosses the +/-180deg seam, which real routes with a
-    // U-ish turn or a heading near due-south hit constantly.
-    const currentHeading = -groupRef.current.rotation.y;
-    let diff = targetHeadingRad - currentHeading;
-    diff = ((diff + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-    const newHeading = currentHeading + diff * alpha;
+    // Shortest-arc, yaw-rate-capped heading (no long-way-round spins, no
+    // toy-like pivoting on a big station step).
+    const newHeading = approachHeading(-groupRef.current.rotation.y, targetHeadingRad, alpha, delta);
     groupRef.current.rotation.y = -newHeading;
 
     sharedVehicleState.x = groupRef.current.position.x;
@@ -420,7 +429,7 @@ function NpcVehicle({ worldPos, worldHeadingRad, isDetected, perceptionInfo }: {
     groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, worldPos.x, alpha);
     groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, worldPos.z, alpha);
     groupRef.current.position.y = 0.4;
-    groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, -worldHeadingRad, alpha);
+    groupRef.current.rotation.y = -approachHeading(-groupRef.current.rotation.y, worldHeadingRad, alpha, delta);
 
     if (fadeElapsed.current < NPC_FADE_IN_DURATION_S) {
       fadeElapsed.current += delta;
@@ -831,7 +840,7 @@ function SurroundTrackBox({ a }: { a: AnnotatedTrack }) {
     const k = Math.min(1, delta * 12);
     groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, track.x, k);
     groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, track.z, k);
-    groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, -heading, k);
+    groupRef.current.rotation.y = -approachHeading(-groupRef.current.rotation.y, heading, k, delta);
   });
 
   return (
