@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { PerspectiveCamera, Grid, Html, Line } from '@react-three/drei';
 import { useSimulationStore } from '../../store/useSimulationStore';
@@ -17,6 +17,7 @@ import { annotateTracks, ROLE_LABEL, type AnnotatedTrack, type TrackRole } from 
 
 // Shared GPU resources — created once, never per-frame or per-track.
 const UNIT_EDGES = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+const EMPTY_GEOM = new THREE.BufferGeometry();
 
 // Real pixel-width lines: native THREE.Line/lineBasicMaterial's `linewidth`
 // is capped at 1px on most GPUs/browsers (a long-standing WebGL
@@ -74,38 +75,128 @@ function useRouteGeometry(): RouteGeometry | null {
   return useMemo(() => buildRouteGeometry(routeWaypoints), [routeWaypoints]);
 }
 
-// --- 1. Tesla / Waymo Planned Trajectory Ribbon (Path of Intent) ---
-function PlannedTrajectoryRibbon() {
-  const meshRef = useRef<THREE.Mesh>(null);
+// --- 1. Planned-path corridor (§6): the chosen lateral plan sampled
+// through the REAL route geometry so it follows the road's curves, built
+// as a tapered ribbon rather than a line. Colour tracks the binding
+// constraint (speed_limit_reason). When the plan changes materially the
+// previous ribbon fades out while the new one fades in -- no visual jump.
+const CORRIDOR_HORIZON_M = 46;
+const CORRIDOR_STEPS = 20;
+const CORRIDOR_HALF_W = 1.25;
+
+const CORRIDOR_COLOR: Record<string, string> = {
+  cruise: THEME.teslaBlueRibbon,
+  lateral_accel_limit: THEME.detectedWarning,
+  tracking_correction: THEME.teslaBlueRibbon,
+  car_following: THEME.detectedWarning,
+  predictive_cut_in: THEME.detectedWarning,
+  safety_shield_override: THEME.detectedCritical,
+};
+
+/** Tapered triangle-strip ribbon from a centreline. */
+function buildRibbonGeometry(points: THREE.Vector3[]): THREE.BufferGeometry {
+  const n = points.length;
+  const pos = new Float32Array(n * 2 * 3);
+  const tan = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    const p = points[i];
+    const prev = points[Math.max(0, i - 1)];
+    const next = points[Math.min(n - 1, i + 1)];
+    tan.subVectors(next, prev);
+    const nx = tan.z, nz = -tan.x;
+    const len = Math.hypot(nx, nz) || 1;
+    const w = CORRIDOR_HALF_W * (1 - 0.45 * (i / (n - 1)));
+    const ox = (nx / len) * w, oz = (nz / len) * w;
+    pos[i * 6 + 0] = p.x + ox; pos[i * 6 + 1] = p.y; pos[i * 6 + 2] = p.z + oz;
+    pos[i * 6 + 3] = p.x - ox; pos[i * 6 + 4] = p.y; pos[i * 6 + 5] = p.z - oz;
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const a = i * 2, b = i * 2 + 1, c = i * 2 + 2, d = i * 2 + 3;
+    idx.push(a, b, c, b, d, c);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  return g;
+}
+
+function PlannedCorridor() {
+  const ego = useSimulationStore((s) => s.ego);
+  const planner = useSimulationStore((s) => s.planner);
+  const routeGeom = useRouteGeometry();
+
+  const chosenD =
+    planner?.candidates.find((c) => c.is_chosen)?.d_target ??
+    planner?.lane_center ??
+    ego?.frenet?.d ??
+    0;
+  const reason = ego?.speed_limit_reason ?? 'cruise';
+  const color = CORRIDOR_COLOR[reason] ?? THEME.teslaBlueRibbon;
+
+  // Rebuild only when the plan actually moves (quantised signature).
+  const sig = ego
+    ? `${Math.round(ego.frenet.s)}:${(ego.frenet.d).toFixed(1)}:${chosenD.toFixed(1)}:${Boolean(routeGeom)}`
+    : 'none';
 
   const geometry = useMemo(() => {
-    return new THREE.PlaneGeometry(2.4, 50, 1, 16);
-  }, []);
-
-  useFrame((state) => {
-    if (meshRef.current) {
-      const forward = headingToForward(sharedVehicleState.headingRad);
-      // Keep ribbon locked directly in front of the vehicle, along its
-      // REAL heading (not always -Z -- the road curves now).
-      const aheadDist = 26;
-      meshRef.current.position.set(
-        sharedVehicleState.x + forward.x * aheadDist,
-        0.03,
-        sharedVehicleState.z + forward.z * aheadDist,
-      );
-      meshRef.current.rotation.y = -sharedVehicleState.headingRad;
-
-      const material = meshRef.current.material as THREE.MeshBasicMaterial;
-      if (material) {
-        material.opacity = 0.35 + Math.sin(state.clock.elapsedTime * 4) * 0.12;
+    if (!ego) return null;
+    let pts: THREE.Vector3[];
+    if (routeGeom) {
+      pts = sampleFrenetCorridor(routeGeom, ego.frenet.s, ego.frenet.d, chosenD, CORRIDOR_HORIZON_M, CORRIDOR_STEPS);
+    } else {
+      const f = headingToForward(sharedVehicleState.headingRad);
+      pts = [];
+      for (let i = 0; i <= CORRIDOR_STEPS; i++) {
+        const t = (i / CORRIDOR_STEPS) * CORRIDOR_HORIZON_M;
+        pts.push(new THREE.Vector3(sharedVehicleState.x + f.x * t, 0.15, sharedVehicleState.z + f.z * t));
       }
+    }
+    return buildRibbonGeometry(pts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig]);
+
+  // Crossfade handled entirely in the three layer: two persistent meshes,
+  // geometry swapped on the inactive one in an effect, opacity driven in
+  // useFrame. No React state / no ref reads during render.
+  const meshA = useRef<THREE.Mesh>(null);
+  const meshB = useRef<THREE.Mesh>(null);
+  const active = useRef(0); // which mesh currently shows the live plan
+  const fade = useRef(1);
+
+  useEffect(() => {
+    if (!geometry) return;
+    const incoming = active.current === 0 ? meshB.current : meshA.current;
+    const outgoing = active.current === 0 ? meshA.current : meshB.current;
+    if (!incoming || !outgoing) return;
+    const stale = incoming.geometry;
+    incoming.geometry = geometry;
+    if (stale && stale !== geometry && stale !== EMPTY_GEOM) stale.dispose();
+    active.current = active.current === 0 ? 1 : 0;
+    fade.current = 0;
+  }, [geometry]);
+
+  useFrame((_, delta) => {
+    fade.current = Math.min(1, fade.current + delta * 3.5);
+    const inM = (active.current === 0 ? meshA.current : meshB.current);
+    const outM = (active.current === 0 ? meshB.current : meshA.current);
+    if (inM) (inM.material as THREE.MeshBasicMaterial).opacity = 0.34 * fade.current + 0.12;
+    if (outM) {
+      (outM.material as THREE.MeshBasicMaterial).opacity = 0.34 * (1 - fade.current);
+      outM.visible = fade.current < 1;
     }
   });
 
+  if (!geometry) return null;
   return (
-    <mesh ref={meshRef} geometry={geometry} rotation={[-Math.PI / 2, 0, 0]}>
-      <meshBasicMaterial color={THEME.teslaBlueRibbon} transparent opacity={0.4} side={THREE.DoubleSide} />
-    </mesh>
+    <group>
+      <mesh ref={meshA} geometry={EMPTY_GEOM}>
+        <meshBasicMaterial color={color} transparent opacity={0} side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+      <mesh ref={meshB} geometry={EMPTY_GEOM}>
+        <meshBasicMaterial color={color} transparent opacity={0} side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+    </group>
   );
 }
 
@@ -816,8 +907,9 @@ export function SimulationScene() {
         {/* Real Route Road (or a generic fallback until one is fetched) */}
         <HighwayRoad />
 
-        {/* Trajectory Corridor (Tesla Blue Ribbon) */}
-        <PlannedTrajectoryRibbon />
+        {/* Planned-path corridor — chosen lateral plan through the real
+            road geometry, constraint-coloured, crossfaded on change. */}
+        <PlannedCorridor />
 
         {/* Waymo Radar Sweep */}
         <LidarRadarSweep />
