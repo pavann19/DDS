@@ -11,9 +11,9 @@
   /* --- surfaces --- */
   --bg-app: #07090E;
   --bg-panel: #0D1118;
-  --bg-surface: rgba(20, 26, 38, 0.72);
-  --bg-card: rgba(16, 21, 32, 0.82);
-  --bg-frost: rgba(9, 12, 19, 0.9);   /* HUD / rail glass over the 3D stage */
+  --bg-surface: rgba(20, 26, 38, 0.82);
+  --bg-card: rgba(15, 20, 30, 0.92);
+  --bg-frost: rgba(9, 12, 19, 0.92);   /* HUD / rail glass over the 3D stage */
   --bg-inset: rgba(255, 255, 255, 0.04);
 
   --border-subtle: rgba(255, 255, 255, 0.08);
