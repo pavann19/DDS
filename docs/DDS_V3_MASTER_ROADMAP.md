@@ -358,6 +358,31 @@ Deferred within 7.5: spring-damped camera (still lerp), scenario **event
 timeline** (needs the event stream in the store), fixture-based component
 tests (needs a test runner — Phase 8 tooling task).
 
+### Phase 7.5+ — advanced operator-console upgrade (2026-08-28, same branch)
+A follow-on pass over the shipped 7.5 console — *upgrade, not rebuild*;
+the density architecture, channel-aligned panels and typed protocol
+integration are untouched. Every addition is backed by real streamed
+state; **traffic signals / crosswalks / intersections / merge geometry
+were explicitly not built** — the backend has no map or signal data and
+faking it would violate the data-honesty rule. Commits `b961e2b` →
+`5c38083`.
+
+| # | Upgrade | Data source |
+|---|---|---|
+| A | Operational event log + timeline (`store/useEvents`, `console/EventTimeline`) — ticker in the strip, `list` in rail panel 07 | the real `{type:"event"}` scenario milestone stream (`scenario_engine._create_event`); empty in free drive |
+| B | Semantic track roles + 3-tier perception hierarchy (`lib/roles.ts`) — cut-in / lead / oncoming / adjacent / pedestrian / cyclist / static; primary→full card, ambient→faint outline | `cut_in.track_id`, `sensed_lead_vehicle`, `is_changing_lane`, track class/kinematics |
+| C | Planned-path **corridor** — chosen lateral plan sampled through the real route geometry (curvature-aware tapered ribbon), constraint-coloured, crossfades on plan change | `planner.candidates[is_chosen].d_target`, `speed_limit_reason`, route geom |
+| D | **Spatial** risk region — localized patch between ego and the actual threat, stretched along that line; silent at NONE | `cut_in` + `safety_shield.risk_level` + track position |
+| E | Anticipatory chase camera — low-pass-filtered steering + curvature leads the look-at into the curve; speed-scaled distance/height; still damped-lerp, no springs | `steering_angle`, `planner.curvature`, `velocity` |
+| F | Context-aware rail (numbered 01–07 pipeline, `panelSalience` dims idle / auto-opens the reacting panel) + HUD autonomy-state pill + path-clearance badge + steering dial (`lib/consoleState.ts`) | `speed_limit_reason` + `safety_shield` + `cut_in` + `is_changing_lane` |
+| G | `focus` density trims the stage (primary tracks only, no scored alternates); forward sweep only runs on a real detection; per-frame allocation cleanup | — |
+| H | HUD/Ego never display negative road speed (solver artifact from the shield-recovery branch; backend fix flagged) | — |
+
+`npm run verify:ui` extended to accept the `event.` channel; still green.
+Deferred / still honest gaps: the intruding vehicle sometimes reads
+"Tracked" not "Cut-in" when the numeric track-id ↔ `cut_in.track_id`
+match fails; spring camera; 60-FPS frame-time gate (Phase 12 harness).
+
 ---
 
 ## Phase 8 — Unified Spatiotemporal (s, d, t) Motion Planning
