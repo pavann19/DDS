@@ -383,6 +383,27 @@ Deferred / still honest gaps: the intruding vehicle sometimes reads
 "Tracked" not "Cut-in" when the numeric track-id ↔ `cut_in.track_id`
 match fails; spring camera; 60-FPS frame-time gate (Phase 12 harness).
 
+### Phase 7.5++ — cockpit visual skin (2026-08-28, same branch, commits `16fb345` → `b53b9b9`)
+A pure restyle of the 7.5+ console to the "operator cockpit" language of
+a Gemini-built reference prototype the owner preferred (`experimental-ui/`,
+untracked). Data wiring, honesty derivations (`roles.ts`,
+`consoleState.ts`, `useEvents`) and the channel contract are unchanged.
+
+| # | Restyle | Note |
+|---|---|---|
+| I | Tokens retuned (near-black `#07090E`, cyan `#00F2FE`, heavy glass, larger radii) + Outfit / Inter / JetBrains Mono via `next/font`. Token *names* unchanged. | — |
+| J | `ConsoleLayout` → floating glass panels over full-bleed canvas (no grid, no solid rail): top HUD bar, top-right quick strip, 372px rail that slides out in `focus`, bottom-centre card slot, full-width scenario bar. | `.dds-glass` utility |
+| K | HUD rebuilt as a 3-cluster automotive bar: display-face speed + "D" + target roundel · autonomous-state pill (beacon + real `deriveAutonomy`) + steering wheel · forward radar (`sensed_lead_vehicle`) + path-clearance badge. Still no learned-model decision/confidence. | deletes dead `TopBar` |
+| L | Rail = always-open cockpit cards (icon + display heading + channel tag, tone-accent border, `salience` dims quiet ones); `MultiStat` for perception class tallies; header reads **"10 Hz"** (the real rate). Deletes now-dead `Panel` + `Disclosure`. | — |
+| M | Bottom-centre **maneuver card** — the honest version of the reference's "AI PLANNER DECISION" card: **no confidence gauge** (deterministic planner, ADR-001); title = plain maneuver from `speed_limit_reason` + `is_changing_lane` + `cut_in`; factors = only real observed conditions; ACCEL/STEER/TARGET badges from the ego channel; compacts in `focus`. `deriveManeuver()` added. | — |
+| N | Scenario bar → "🎬 SCENARIO" + scrolling pill picks + icon playback buttons; SimulationScene gets ACESFilmic tone-mapping + exponential fog + cyan rim light; surround-track labels restyled to glass tags with a pointer. | — |
+
+Verified live across `focus` / `standard` / `inspect`. Preview-only note:
+the embedded browser doesn't composite `backdrop-filter`, so glass
+opacity is set high (~0.92) for legibility there; real Chrome renders the
+blur. Not-data-backed reference elements (traffic-signal roundel, "OBD
+GPS", pedestrian-crossing %, camera view modes) were dropped, not faked.
+
 ---
 
 ## Phase 8 — Unified Spatiotemporal (s, d, t) Motion Planning
