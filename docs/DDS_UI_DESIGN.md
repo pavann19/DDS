@@ -130,6 +130,69 @@ Four rules make this real rather than cosmetic:
 
 ---
 
+## Visual language — Waymo stage, Tesla overlay
+
+Two references, applied to two distinct layers. Both are used as *style*
+references for what to build, not as a claim of parity or of matching
+sensor hardware (the roadmap's standing framing).
+
+### The 3D stage reads like the Waymo Driver visualization
+
+A calm, semi-abstract world where the road is muted and the *semantics*
+are bright and labelled. Everything on the stage is a real backend field
+rendered in 3D — nothing decorative.
+
+| Element | Treatment | Source field |
+|---|---|---|
+| **Road** | Extruded ribbon from the real smoothed route: dark matte asphalt (`--surface` darkened), crisp lane lines, subtle bloom on the centre line. Ground plane fades to `--bg-app` at the horizon — no skybox. | `route` message → `routeGeometry.ts` |
+| **Ego** | A clean low-poly vehicle (not a photoreal model): dark body, cyan underglow, steer-linked front wheels, brake-linked taillight. | `pose.ego` (`yaw`, `steering_angle`, `acceleration`) |
+| **Other cars** | Low-poly NPC bodies, class-coloured (`SEDAN`/`SUV`/`TRUCK`/…), each wrapped in a **thin wireframe bounding box** with a floating **label card** — id, class, speed, range — that always faces the camera. Confirmed = solid box; coasted = dashed, dimmed. | `heavy.surround_perception` (`class`, `x/z`, `vx/vz`, `range_m`, `dims`) |
+| **Forward lead** | The one same-lane vehicle IDM is tracking gets a highlighted box + a gap line drawn on the road surface with the metre value. | `semantic.perception` (`distance`, `rel_velocity`) |
+| **Path planner** | A flowing translucent **corridor ribbon** along the chosen trajectory (Tesla-blue), width ≈ lane; the dimmed alternative candidates as thin lines; a small lookahead marker. Animates as the plan updates. | `semantic.planner` (`trajectory`, `candidates`, `lane_center`) |
+| **Predicted paths** | Per agent, a **translucent tapered tube** along its 3 s forecast, coloured by dominant intent (green keep / amber merge / red stop), fading toward the horizon end. The cut-in agent's tube is opaque and thicker. | `heavy.prediction` (`agents[].trail`, `agents[].intent`) |
+| **Risk / occupancy** | A soft ground-projected heat wash near the ego from the risk field; optional log-odds occupancy grid at `inspect` density. | `heavy.prediction` risk, `heavy.surround_perception` occupancy |
+| **Camera** | Smooth chase rig — spring-damped follow, slight look-ahead into turns, never snaps. Free-orbit available. | — |
+
+Palette on the stage: road and world stay low-contrast and desaturated so
+the semantic overlays (boxes, tubes, corridor, labels) carry all the
+colour. This is the Waymo move — the interesting thing is what the car
+*understands*, not the scenery.
+
+### The overlay reads like Tesla FSD — smooth, minimal, animated
+
+The HUD and rail sit *on top* of the stage and behave like Tesla's
+visualization chrome: low chrome, glassy, and everything **eases** rather
+than cuts.
+
+- **Motion tokens** (new in `globals.css`): `--ease-out: cubic-bezier(.16,1,.3,1)`,
+  `--dur-fast: 140ms`, `--dur: 240ms`, `--dur-slow: 420ms`, `--spring`
+  for physical elements. Numbers **tween** to new values (speed, gap,
+  probability) — no digit-snapping. Panels **slide + fade** on
+  expand/collapse. The predictive-slowdown chip **grows in** from the HUD,
+  it doesn't pop.
+- **HUD**: a single frosted block, generous corner radius, hairline
+  border, a soft inner top highlight. Speed in a light weight, large;
+  everything else small and mono. The steering indicator rotates
+  continuously with `--spring`.
+- **Rail panels**: frosted like the HUD, not opaque cards. Expand/collapse
+  is a height + opacity transition on `--ease-out`. A state change
+  (shield override, cut-in engaged) triggers a one-shot accent pulse on
+  that panel's border, then settles.
+- **State in form, not just colour**: a severity stripe on the left edge
+  of a panel, a filling meter for probabilities, a chip for binding
+  constraint — so "something needs attention" reads pre-attentively, the
+  way Tesla's red-car / blue-path contrast does.
+- `prefers-reduced-motion`: all tweens/transitions drop to `0.01ms`;
+  values update instantly; the pulse becomes a static border colour.
+
+### Fidelity is not photorealism
+
+Low-poly, flat-shaded, few lights. The target is *legible and smooth at
+60 FPS with 30 agents*, not a render. A photoreal asphalt shader and
+headlight cones are explicitly Phase 12 (Advanced Visualizer), not 7.5.
+
+---
+
 ## Options Considered
 
 ### Option A — Incremental polish (fix labels, unify tokens, leave structure)
@@ -260,26 +323,39 @@ clean.
    `speed_limit_reason` binding-constraint readout, steering, predictive
    -slowdown chip. Delete `app/components/DriveHUD.tsx` and `DriveMode`'s
    inline overlay.
-4. [ ] **Channel-aligned panels** — one component each, each importing its
+4. [ ] **Waymo-style stage** — rework `3d/SimulationScene.tsx` into the
+   visual language above: extruded route road with lane lines and horizon
+   fade; low-poly ego + class-coloured NPC bodies; per-track wireframe
+   bounding box + camera-facing label card (id/class/speed/range) from
+   `heavy.surround_perception`; the planned-path **corridor ribbon** +
+   dimmed candidates from `semantic.planner`; per-agent **tapered forecast
+   tubes** intent-coloured from `heavy.prediction`; ground risk wash;
+   spring-damped chase camera. Desaturated world, bright semantics.
+5. [ ] **Channel-aligned panels** — one component each, each importing its
    `protocol.ts` type: `EgoControlPanel` (`pose.ego`), `PerceptionPanel`
    (`semantic.perception` + `heavy.surround_perception`), `PredictionPanel`
    (`heavy.prediction` — intent bars, cut-in P + TTC, per-agent forecast
    list, risk summary), `SafetyPanel` (`semantic.safety_shield`),
    `PlannerPanel` (`semantic.planner`), `DriverAnalyticsPanel`
    (`semantic.driver_analytics`, with the disclaimer).
-5. [ ] **Bottom strip** — `console/ScenarioStrip.tsx`: scenario state +
+6. [ ] **Tesla-style overlay motion** — add the motion tokens to
+   `globals.css`; tween all HUD/panel numeric values (no digit-snap);
+   slide+fade panel expand/collapse on `--ease-out`; one-shot accent pulse
+   on a panel's border for a state change; `--spring` steering indicator;
+   full `prefers-reduced-motion` path.
+7. [ ] **Bottom strip** — `console/ScenarioStrip.tsx`: scenario state +
    event timeline (from the `"event"` messages) + pause/step/reset +
    destination input. Folds in `ScenarioControlRoom`.
-6. [ ] **Density wiring** — `focus` (HUD only) / `standard` (HUD + rail) /
-   `inspect` (all panels expanded, raw numbers, full `heavy` render). Each
-   panel reads `density` and renders accordingly.
-7. [ ] **Kill the stale labels** — remove `ai_decelerate` handling, rewrite
+8. [ ] **Density wiring** — `focus` (HUD only) / `standard` (HUD + rail) /
+   `inspect` (all panels expanded, raw numbers, full `heavy` render incl.
+   occupancy grid). Each panel reads `density` and renders accordingly.
+9. [ ] **Kill the stale labels** — remove `ai_decelerate` handling, rewrite
    `ShieldPanel`'s "AI Decision" framing, fix the Hz labels, move
    `decision`/`confidence` off the HUD into `DriverAnalyticsPanel`.
-8. [ ] **Panel-contract test** — `tsc`-checked assertion that every
+10. [ ] **Panel-contract test** — `tsc`-checked assertion that every
    `panels/*Panel.tsx` imports a channel type from `protocol.ts`, plus the
    capability-claim denylist scan.
-9. [ ] **Retire `research` route or fold to `inspect`** — decide per the
+11. [ ] **Retire `research` route or fold to `inspect`** — decide per the
    "what we'll revisit" note; remove the dead "Deploy Experiment" stub.
 
 **Acceptance gates**
@@ -300,12 +376,20 @@ clean.
 - **UI.6** `focus` density is pixel-equivalent in layout to today's Drive
   mode (stage + HUD, nothing else) — visual check + a snapshot of the
   rendered DOM having only the HUD + canvas.
-- **UI.7** 60 FPS at 1080p with 30 vehicles + prediction ribbons at
-  `standard` density (reuses Phase 12's Gate 12.1 harness once it exists;
-  until then, a manual `performance.now()` frame-time log < 16.7 ms p95).
+- **UI.7** 60 FPS at 1080p with 30 vehicles + forecast tubes + bounding
+  boxes at `standard` density (reuses Phase 12's Gate 12.1 harness once it
+  exists; until then, a manual `performance.now()` frame-time log
+  < 16.7 ms p95).
 - **UI.8** Keyboard: the console is operable without a mouse (tab order
   through rail panels, density toggle, scenario controls); no `tabindex`
   traps.
+- **UI.9** Stage-object traceability: every rendered stage object (NPC box,
+  label card, corridor, forecast tube, gap line) is driven by a store
+  field — asserted by a test that clears the store and confirms the scene
+  renders only the road + ego.
+- **UI.10** `prefers-reduced-motion: reduce` — no transition longer than
+  1 ms; numeric values update without tween; the state pulse is a static
+  colour. Checked in a jsdom test.
 
 No new driving capability is claimed from this ADR — it is the interface
 foundation Phases 8–13 render into.

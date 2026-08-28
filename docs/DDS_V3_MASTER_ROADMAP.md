@@ -267,15 +267,35 @@ takeovers that never use the protocol v3 channel split.
 This delivers **no new driving behaviour**. It is the interface foundation
 Phases 8–13 render into.
 
+**Visual language:** the 3D stage reads like the **Waymo Driver
+visualization** — desaturated road, bright labelled semantics: low-poly
+ego + class-coloured NPC bodies, per-track wireframe bounding boxes with
+camera-facing label cards, a flowing planned-path corridor, per-agent
+intent-coloured forecast tubes, a ground risk wash. The overlay (HUD +
+rail) reads like **Tesla FSD** — frosted, minimal, everything tweens/eases
+rather than snaps. Both are *style* references, not parity claims; fidelity
+is legible-at-60-FPS low-poly, not photorealism (that's Phase 12).
+
 ### Scope
-- [ ] Tokens & `primitives/` (`Panel`, `Stat`, `Readout`, `Chip`, `Meter`,
-  `Disclosure`); delete the ad-hoc `bg-black/40` glass.
+- [ ] Tokens (incl. new **motion tokens**: `--ease-out`, `--dur*`,
+  `--spring`) & `primitives/` (`Panel`, `Stat`, `Readout`, `Chip`,
+  `Meter`, `Disclosure`); delete the ad-hoc `bg-black/40` glass.
 - [ ] `console/ConsoleLayout` — top bar / 3D stage / right rail / bottom
   strip on one always-mounted screen; `density` control (`focus` /
   `standard` / `inspect`) replaces the `activeMode` enum.
-- [ ] One `hud/DriveHUD` on primitives (speed, target, `speed_limit_reason`
-  binding constraint, steering, predictive-slowdown chip); delete the
-  duplicate `app/components/DriveHUD.tsx` + `DriveMode`'s inline overlay.
+- [ ] **Waymo-style stage** — rework `3d/SimulationScene.tsx`: extruded
+  route road + lane lines + horizon fade; low-poly ego + class-coloured
+  NPCs; per-track wireframe box + label card from
+  `heavy.surround_perception`; planned-path corridor ribbon + dimmed
+  candidates from `semantic.planner`; per-agent tapered forecast tubes
+  (intent-coloured) from `heavy.prediction`; ground risk wash;
+  spring-damped chase camera.
+- [ ] **Tesla-style overlay motion** — one `hud/DriveHUD` on primitives
+  (speed, target, `speed_limit_reason` binding constraint, steering,
+  predictive-slowdown chip); tween all numeric values (no digit-snap);
+  slide+fade panel expand/collapse; one-shot border pulse on state change;
+  full `prefers-reduced-motion` path. Delete the duplicate
+  `app/components/DriveHUD.tsx` + `DriveMode`'s inline overlay.
 - [ ] Channel-aligned panels, one component each importing its
   `protocol.ts` type: `EgoControl` (`pose.ego`), `Perception`
   (`semantic.perception` + `heavy.surround_perception`), `Prediction &
@@ -305,6 +325,14 @@ Phases 8–13 render into.
 - **7.5.6** `focus` density is layout-equivalent to today's Drive mode
   (stage + HUD only) — rendered-DOM snapshot.
 - **7.5.7** Keyboard-operable end to end; no `tabindex` traps.
+- **7.5.8** Stage-object traceability: with the store cleared, the scene
+  renders only road + ego — every box / label / corridor / tube is a
+  store-field consequence.
+- **7.5.9** `prefers-reduced-motion: reduce` — no transition > 1 ms, no
+  numeric tween, static state colour (jsdom test).
+- **7.5.10** 60 FPS at 1080p with 30 NPCs + forecast tubes + boxes at
+  `standard` density (frame-time p95 < 16.7 ms; shares Phase 12 Gate
+  12.1's harness once it exists).
 
 ---
 
