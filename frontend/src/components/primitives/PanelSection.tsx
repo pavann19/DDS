@@ -18,6 +18,9 @@ interface PanelSectionProps {
   pulseKey?: string | number;
   /** Stagger index for the mount slide-in. */
   index?: number;
+  /** Context-aware emphasis (§12): quiet subsystems recede, the reacting
+   *  one is full-strength. `alert` also nudges the panel open. */
+  salience?: 'quiet' | 'active' | 'alert';
   children: React.ReactNode;
 }
 
@@ -32,19 +35,23 @@ export function PanelSection({
   open,
   pulseKey,
   index = 0,
+  salience = 'active',
   children,
 }: PanelSectionProps) {
+  const resolvedOpen = open ?? (salience === 'alert' ? true : undefined);
   return (
     <div
       style={{
         animation: `dds-slide-in var(--dur) var(--ease-out) both`,
         animationDelay: `${index * 45}ms`,
+        opacity: salience === 'quiet' ? 0.66 : 1,
+        transition: 'opacity var(--dur) var(--ease-out)',
       }}
     >
     <Panel tone={tone} frost pulseKey={pulseKey}>
       <Disclosure
         defaultOpen={defaultOpen}
-        open={open}
+        open={resolvedOpen}
         summary={title}
         aside={
           <span

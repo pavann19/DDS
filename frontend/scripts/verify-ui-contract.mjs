@@ -28,7 +28,9 @@ const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'src');
 /** Files that make up the live console (everything page.tsx pulls in). */
 const LIVE_DIRS = ['app', 'components/console', 'components/hud', 'components/3d', 'components/primitives'];
 
-const VALID_CHANNEL = /^(pose|semantic|heavy)\./;
+// pose./semantic./heavy. are the protocol v3 channels; event. is the
+// separate top-level {type:"event"} scenario stream (also real backend data).
+const VALID_CHANNEL = /^(pose|semantic|heavy|event)\./;
 
 const DENYLIST = [
   { re: /\bAI[\s-]?decision\b/i, why: 'model output is analytics, not a control/decision label (ADR-001)' },
