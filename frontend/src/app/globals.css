@@ -3,40 +3,43 @@
 :root {
   /* ============================================================
      DDS console tokens — the ONLY colour / spacing / motion source
-     (ADR-002). Components read these via var(); no ad-hoc literals.
-     Deliberately a single dark visual world: an AV cockpit UI.
+     (ADR-002). Retuned to the "operator cockpit" visual language:
+     near-black ground, heavy glassmorphism, one electric-cyan accent,
+     Outfit display type. Components read these via var(); no literals.
      ============================================================ */
 
   /* --- surfaces --- */
-  --bg-app: #0A0D12;
-  --bg-panel: #12161E;
-  --bg-surface: #1A1F2B;
-  --bg-frost: rgba(9, 12, 17, 0.62);   /* HUD / rail panels over the 3D stage */
+  --bg-app: #07090E;
+  --bg-panel: #0D1118;
+  --bg-surface: rgba(18, 24, 36, 0.55);
+  --bg-card: rgba(18, 24, 36, 0.6);
+  --bg-frost: rgba(11, 15, 22, 0.78);   /* HUD / rail glass over the 3D stage */
+  --bg-inset: rgba(255, 255, 255, 0.03);
 
-  --border-subtle: #1A1F2B;
-  --border-default: #2A303C;
-  --border-strong: #333B49;
-  --border-focus: #3A4250;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --border-focus: rgba(0, 242, 254, 0.5);
 
   /* --- ink --- */
-  --text-faint: #5A6474;
-  --text-muted: #94a3b8;
-  --text-primary: #CBD5E1;
+  --text-faint: #64748B;
+  --text-muted: #94A3B8;
+  --text-primary: #E2E8F0;
   --text-bright: #F8FAFC;
 
   /* --- accent (one) --- */
-  --brand: #00E5FF;
-  --brand-muted: rgba(0, 229, 255, 0.18);
-  --brand-dim: #0A6E7C;
+  --brand: #00F2FE;
+  --brand-muted: rgba(0, 242, 254, 0.12);
+  --brand-dim: rgba(0, 242, 254, 0.35);
   --brand-ink: #04222A;               /* text on a brand fill */
 
   /* --- semantic state (separate from the accent) --- */
-  --success: #00FF88;
-  --success-muted: rgba(0, 255, 136, 0.16);
-  --warning: #FFAB00;
-  --warning-muted: rgba(255, 171, 0, 0.14);
-  --critical: #FF3D00;
-  --critical-muted: rgba(255, 61, 0, 0.16);
+  --success: #10B981;
+  --success-muted: rgba(16, 185, 129, 0.15);
+  --warning: #F59E0B;
+  --warning-muted: rgba(245, 158, 11, 0.16);
+  --critical: #EF4444;
+  --critical-muted: rgba(239, 68, 68, 0.18);
 
   /* --- spacing scale (4px base) --- */
   --space-1: 4px;
@@ -48,18 +51,25 @@
   --space-8: 48px;
 
   /* --- radius --- */
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius-md: 9px;
-  --radius-lg: 12px;
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
   --radius-pill: 999px;
 
-  /* --- elevation --- */
+  /* --- glass + elevation --- */
+  --glass-blur: blur(20px) saturate(180%);
+  --glass-blur-sm: blur(12px) saturate(160%);
   --elev-1: 0 1px 2px rgba(0, 0, 0, 0.35);
   --elev-2: 0 8px 24px -8px rgba(0, 0, 0, 0.55);
-  --elev-frost: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 12px 30px -14px rgba(0, 0, 0, 0.7);
+  --elev-frost: 0 10px 30px -5px rgba(0, 0, 0, 0.6), 0 0 20px rgba(0, 242, 254, 0.05);
+  --elev-card: 0 20px 40px -10px rgba(0, 0, 0, 0.7);
+  --glow-brand: 0 0 24px rgba(0, 242, 254, 0.22);
+  --glow-warning: 0 0 24px rgba(245, 158, 11, 0.25);
+  --glow-critical: 0 0 24px rgba(239, 68, 68, 0.32);
 
-  /* --- motion (Tesla-smooth overlay: things ease, they don't snap) --- */
+  /* --- motion (things ease, they don't snap) --- */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --dur-fast: 140ms;
@@ -67,9 +77,10 @@
   --dur-slow: 420ms;
   --spring: 520ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  /* --- type --- */
-  --font-sans: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: "IBM Plex Mono", "Cascadia Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  /* --- type (faces loaded via next/font in layout.tsx) --- */
+  --font-display: var(--font-outfit), "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-sans: var(--font-inter), "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: var(--font-jetbrains), "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
 @theme inline {
@@ -85,7 +96,7 @@
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--border-default) transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 body {
@@ -94,14 +105,14 @@ body {
   font-family: var(--font-sans);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   font-variant-numeric: tabular-nums;
 }
 
-::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: var(--radius-xs); }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-xs); }
 
-/* Canvas rendering hint */
 canvas { touch-action: none; }
 
 :focus-visible {
@@ -117,7 +128,7 @@ canvas { touch-action: none; }
   100% { box-shadow: 0 0 0 6px transparent; }
 }
 
-/* HUD chips grow in rather than pop (Tesla-smooth). */
+/* HUD chips grow in rather than pop. */
 @keyframes dds-grow {
   from { opacity: 0; transform: translateY(4px) scale(0.94); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
@@ -129,8 +140,19 @@ canvas { touch-action: none; }
   to   { opacity: 1; transform: translateX(0); }
 }
 
-/* Tesla-smooth means reduced-motion is a real path, not an afterthought:
-   every transition/animation collapses, values update instantly. */
+/* Live status beacon — a soft breathing pulse (system is active). */
+@keyframes dds-beacon {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50%      { transform: scale(1.4); opacity: 0.35; }
+}
+
+/* Hazard badge flash. */
+@keyframes dds-hazard {
+  from { opacity: 0.82; }
+  to   { opacity: 1; box-shadow: var(--glow-critical); }
+}
+
+/* Reduced-motion is a real path: every transition/animation collapses. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
