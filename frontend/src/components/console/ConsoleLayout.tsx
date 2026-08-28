@@ -2,99 +2,150 @@
 
 import React from 'react';
 import { useConsole } from '../../store/useConsole';
-import { TopBar } from './TopBar';
+import { useSimulationStore } from '../../store/useSimulationStore';
+import { DensityToggle } from './DensityToggle';
 
 interface ConsoleLayoutProps {
-  /** The HUD overlay — mounts over the stage in every density. */
+  /** The automotive HUD bar — top, over the stage, every density. */
   hud?: React.ReactNode;
-  /** Right rail of channel-bound panels — hidden in `focus`. */
+  /** Right rail of channel-bound cards — slides away in `focus`. */
   rail?: React.ReactNode;
-  /** Bottom scenario / timeline strip — hidden in `focus`. */
+  /** Bottom-centre maneuver card — compacts in `focus`. */
+  card?: React.ReactNode;
+  /** Bottom scenario strip — full width. */
   strip?: React.ReactNode;
 }
 
+const RAIL_W = 372;
+
 /**
- * The one console surface (ADR-002). An absolute overlay above the
- * always-mounted <SimulationScene/>: top bar / stage passthrough / right
- * rail / bottom strip. The grid itself is click-through; only the chrome
- * takes pointer events.
+ * The one console surface (ADR-002), cockpit layout: floating glass panels
+ * over the always-mounted <SimulationScene/>. Nothing is a solid slab —
+ * the 3D stage reads through every gap.
  *
- *   focus     topbar(mini) + stage + HUD
- *   standard  topbar + stage + HUD + rail + strip
- *   inspect   same layout as standard; panels render denser (item 8)
+ *   focus     HUD (full width) + compact card + stage
+ *   standard  HUD + right rail + card + scenario strip
+ *   inspect   same frame; cards render denser (raw rows)
  */
-export function ConsoleLayout({ hud, rail, strip }: ConsoleLayoutProps) {
+export function ConsoleLayout({ hud, rail, card, strip }: ConsoleLayoutProps) {
   const density = useConsole((s) => s.density);
-  const showChrome = density !== 'focus';
+  const isConnected = useSimulationStore((s) => s.isConnected);
+  const tick = useSimulationStore((s) => s.tick);
+  const focus = density === 'focus';
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 10,
-        display: 'grid',
-        gridTemplateColumns: showChrome ? '1fr 300px' : '1fr',
-        gridTemplateRows: showChrome ? '42px 1fr 92px' : '42px 1fr',
-        gridTemplateAreas: showChrome
-          ? '"topbar topbar" "stage rail" "strip strip"'
-          : '"topbar" "stage"',
-        pointerEvents: 'none',
-        transition: 'grid-template-columns var(--dur) var(--ease-out)',
-      }}
-    >
-      <div style={{ gridArea: 'topbar' }}>
-        <TopBar />
+    <div style={{ position: 'absolute', inset: 0, zIndex: 10, pointerEvents: 'none' }}>
+      {/* top HUD bar */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 'var(--space-4)',
+          left: 'var(--space-5)',
+          right: focus ? 'var(--space-5)' : `calc(${RAIL_W}px + var(--space-6))`,
+          pointerEvents: 'auto',
+          transition: 'right var(--dur) var(--ease-out)',
+        }}
+      >
+        {hud}
       </div>
 
-      {/* stage area is a passthrough to the canvas behind; the HUD sits in it */}
-      <div style={{ gridArea: 'stage', position: 'relative', overflow: 'hidden' }}>
-        {hud && (
-          <div
-            style={{
-              position: 'absolute',
-              left: 'var(--space-5)',
-              right: 'var(--space-5)',
-              bottom: 'var(--space-4)',
-              pointerEvents: 'none',
-            }}
-          >
-            {hud}
-          </div>
-        )}
-      </div>
-
-      {showChrome && (
-        <aside
-          aria-label="Subsystem panels"
-          style={{
-            gridArea: 'rail',
-            borderLeft: '1px solid var(--border-default)',
-            background: 'var(--bg-panel)',
-            overflowY: 'auto',
-            padding: 'var(--space-2)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--space-2)',
-            pointerEvents: 'auto',
-          }}
+      {/* top-right quick controls: connection + tick + density */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 'var(--space-4)',
+          right: focus ? 'var(--space-5)' : `calc(${RAIL_W}px + var(--space-6))`,
+          transform: 'translateY(calc(100% + var(--space-2)))',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-2)',
+          pointerEvents: 'auto',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10.5,
+          color: 'var(--text-muted)',
+          transition: 'right var(--dur) var(--ease-out)',
+        }}
+      >
+        <div
+          className="dds-glass"
+          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 'var(--radius-md)' }}
         >
-          {rail}
-        </aside>
-      )}
+          <span
+            aria-hidden
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: isConnected ? 'var(--success)' : 'var(--critical)',
+              boxShadow: `0 0 8px ${isConnected ? 'var(--success)' : 'var(--critical)'}`,
+              animation: isConnected ? 'dds-beacon 1.8s infinite ease-in-out' : undefined,
+            }}
+          />
+          <span className="sr-only">{isConnected ? 'Connected' : 'Disconnected'}</span>
+          <span style={{ color: 'var(--text-bright)', fontWeight: 700, fontFamily: 'var(--font-display)', letterSpacing: '0.06em' }}>
+            DDS
+          </span>
+          <span style={{ color: 'var(--text-faint)' }}>t{tick.toLocaleString()}</span>
+        </div>
+        <DensityToggle />
+      </div>
 
-      {showChrome && (
+      {/* right rail */}
+      <aside
+        aria-label="Subsystem panels"
+        className="dds-glass"
+        style={{
+          position: 'absolute',
+          top: 'var(--space-4)',
+          right: 'var(--space-5)',
+          bottom: `calc(52px + var(--space-6))`,
+          width: RAIL_W,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          borderRadius: 'var(--radius-xl)',
+          pointerEvents: 'auto',
+          transform: focus ? `translateX(calc(${RAIL_W}px + var(--space-8)))` : 'translateX(0)',
+          opacity: focus ? 0 : 1,
+          transition: 'transform var(--dur-slow) var(--ease-out), opacity var(--dur) var(--ease-out)',
+        }}
+      >
+        {rail}
+      </aside>
+
+      {/* bottom-centre maneuver card */}
+      {card && (
         <div
           style={{
-            gridArea: 'strip',
-            borderTop: '1px solid var(--border-default)',
-            background: 'var(--bg-panel)',
+            position: 'absolute',
+            bottom: `calc(52px + var(--space-6))`,
+            left: focus ? '50%' : `calc((100% - ${RAIL_W}px - var(--space-6)) / 2 + var(--space-5))`,
+            transform: 'translateX(-50%)',
+            width: focus ? 'min(460px, 92vw)' : `min(680px, calc(100vw - ${RAIL_W}px - 120px))`,
             pointerEvents: 'auto',
+            transition: 'left var(--dur) var(--ease-out), width var(--dur) var(--ease-out)',
           }}
         >
-          {strip}
+          {card}
         </div>
       )}
+
+      {/* bottom scenario strip */}
+      <div
+        className="dds-glass"
+        style={{
+          position: 'absolute',
+          bottom: 'var(--space-4)',
+          left: 'var(--space-5)',
+          right: 'var(--space-5)',
+          height: 52,
+          borderRadius: 'var(--radius-lg)',
+          pointerEvents: 'auto',
+          overflow: 'hidden',
+        }}
+      >
+        {strip}
+      </div>
     </div>
   );
 }

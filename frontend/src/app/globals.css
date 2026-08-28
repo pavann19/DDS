@@ -115,6 +115,15 @@ body {
 
 canvas { touch-action: none; }
 
+/* The one glass surface — every floating console panel uses it. */
+.dds-glass {
+  background: var(--bg-frost);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--elev-frost);
+}
+
 :focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
