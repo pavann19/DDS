@@ -12,8 +12,12 @@ interface PanelSectionProps {
   channel: string;
   tone?: Tone;
   defaultOpen?: boolean;
+  /** Controlled open state (density `inspect` forces every panel open). */
+  open?: boolean;
   /** Bump on a subsystem state change → one-shot border pulse. */
   pulseKey?: string | number;
+  /** Stagger index for the mount slide-in. */
+  index?: number;
   children: React.ReactNode;
 }
 
@@ -25,13 +29,22 @@ export function PanelSection({
   channel,
   tone = 'default',
   defaultOpen = false,
+  open,
   pulseKey,
+  index = 0,
   children,
 }: PanelSectionProps) {
   return (
+    <div
+      style={{
+        animation: `dds-slide-in var(--dur) var(--ease-out) both`,
+        animationDelay: `${index * 45}ms`,
+      }}
+    >
     <Panel tone={tone} frost pulseKey={pulseKey}>
       <Disclosure
         defaultOpen={defaultOpen}
+        open={open}
         summary={title}
         aside={
           <span
@@ -54,5 +67,6 @@ export function PanelSection({
         {children}
       </Disclosure>
     </Panel>
+    </div>
   );
 }

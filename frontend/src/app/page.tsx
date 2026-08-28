@@ -6,6 +6,7 @@ import { useSimulationStore } from '../store/useSimulationStore';
 import { SimulationScene } from '../components/3d/SimulationScene';
 import { ConsoleLayout } from '../components/console/ConsoleLayout';
 import { Rail } from '../components/console/RailPanels';
+import { ScenarioStrip } from '../components/console/ScenarioStrip';
 import { DriveHUD } from '../components/hud/DriveHUD';
 
 export default function Home() {
@@ -24,8 +25,8 @@ export default function Home() {
       {/* The 3D stage is always mounted, behind the console overlay. */}
       <SimulationScene />
 
-      {/* One console surface (ADR-002). strip lands in item 7. */}
-      <ConsoleLayout hud={<DriveHUD />} rail={<Rail />} />
+      {/* One console surface (ADR-002): stage passthrough + HUD + rail + strip. */}
+      <ConsoleLayout hud={<DriveHUD />} rail={<Rail />} strip={<ScenarioStrip />} />
     </main>
   );
 }

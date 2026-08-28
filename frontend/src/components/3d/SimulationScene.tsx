@@ -281,7 +281,7 @@ function NpcVehicle({ worldPos, worldHeadingRad, isDetected, perceptionInfo }: {
   worldPos: { x: number; z: number };
   worldHeadingRad: number;
   isDetected: boolean;
-  perceptionInfo?: any;
+  perceptionInfo?: import('../../types/protocol').PerceptionObject;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const lastWorldPos = useRef<{ x: number; z: number } | null>(null);
@@ -606,31 +606,11 @@ function HighwayRoad() {
         <mesh geometry={ribbon.roadGeometry}>
           <meshStandardMaterial color={THEME.roadSurface} roughness={0.95} />
         </mesh>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(
-            ribbon.centerLine.flatMap((p) => [
-              p.clone().add(new THREE.Vector3(0.15, 0, 0)),
-              p.clone().add(new THREE.Vector3(-0.15, 0, 0)),
-            ]),
-          ) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneYellow} linewidth={2} />
-        </line>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(ribbon.leftBound) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneCyan} linewidth={2} />
-        </line>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(ribbon.rightBound) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneCyan} linewidth={2} />
-        </line>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(ribbon.leftLane) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneWhite} transparent opacity={0.7} />
-        </line>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(ribbon.rightLane) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneWhite} transparent opacity={0.7} />
-        </line>
+        <Line points={ribbon.centerLine} color={THEME.laneYellow} lineWidth={2} dashed dashSize={2} gapSize={2} />
+        <Line points={ribbon.leftBound} color={THEME.laneCyan} lineWidth={2} />
+        <Line points={ribbon.rightBound} color={THEME.laneCyan} lineWidth={2} />
+        <Line points={ribbon.leftLane} color={THEME.laneWhite} lineWidth={1} transparent opacity={0.6} dashed dashSize={1.5} gapSize={1.5} />
+        <Line points={ribbon.rightLane} color={THEME.laneWhite} lineWidth={1} transparent opacity={0.6} dashed dashSize={1.5} gapSize={1.5} />
       </group>
     );
   }
@@ -643,6 +623,82 @@ function HighwayRoad() {
         <planeGeometry args={[16, 800]} />
         <meshStandardMaterial color={THEME.roadSurface} roughness={0.95} />
       </mesh>
+    </group>
+  );
+}
+
+// --- 5b. Surround perception tracks (heavy.surround_perception): the
+// ego's own 360-degree sensor-resolved picture -- confirmed tracks only,
+// rendered as a wireframe box at the track's real dims plus a
+// camera-facing label card (class - range - closing speed). This is the
+// Waymo "what the car sees" layer, drawn from the SAME field the
+// Perception panel reads, never from raw NPC ground truth. ---
+const TRACK_CLASS_COLOR: Record<string, string> = {
+  SEDAN: THEME.brandCyan,
+  SUV: THEME.brandCyan,
+  TRUCK: '#8B5CF6',
+  MOTORCYCLE: THEME.detectedWarning,
+  BICYCLE: THEME.detectedWarning,
+  PEDESTRIAN: THEME.detectedSafe,
+  TRAFFIC_CONE: THEME.laneYellow,
+};
+
+function SurroundTrackBox({ track }: { track: import('../../types/protocol').SurroundTrack }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const [len, wid, hei] = track.dims;
+  const color = TRACK_CLASS_COLOR[track.class] ?? '#64748B';
+  const heading = Math.atan2(track.vx, -track.vz);
+  const closing = -(track.vx * Math.sin(track.azimuth_deg * Math.PI / 180) +
+    track.vz * Math.cos(track.azimuth_deg * Math.PI / 180));
+
+  useFrame((_, delta) => {
+    if (!groupRef.current) return;
+    const a = Math.min(1, delta * 12);
+    groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, track.x, a);
+    groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, track.z, a);
+    groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, -heading, a);
+  });
+
+  return (
+    <group ref={groupRef} position={[track.x, 0.02, track.z]}>
+      <lineSegments position={[0, hei / 2, 0]}>
+        <edgesGeometry args={[new THREE.BoxGeometry(wid, hei, len)]} />
+        <lineBasicMaterial color={color} transparent opacity={0.85} />
+      </lineSegments>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+        <ringGeometry args={[Math.max(wid, len) * 0.6, Math.max(wid, len) * 0.66, 24]} />
+        <meshBasicMaterial color={color} transparent opacity={0.35} side={THREE.DoubleSide} />
+      </mesh>
+      <Html position={[0, hei + 0.5, 0]} center distanceFactor={20} zIndexRange={[90, 0]}>
+        <div className="pointer-events-none select-none flex flex-col items-center">
+          <div
+            className="px-2 py-0.5 rounded text-[10px] font-mono tracking-wide whitespace-nowrap border"
+            style={{
+              color: 'var(--text-bright)',
+              background: 'var(--bg-frost)',
+              borderColor: color,
+              backdropFilter: 'blur(4px)',
+            }}
+          >
+            {track.class.toLowerCase()} · {track.range_m.toFixed(0)}m
+            {Number.isFinite(closing) && (
+              <span style={{ opacity: 0.7 }}> · {closing > 0 ? '+' : ''}{closing.toFixed(1)}m/s</span>
+            )}
+          </div>
+        </div>
+      </Html>
+    </group>
+  );
+}
+
+function SurroundPerceptionLayer() {
+  const tracks = useSimulationStore((state) => state.surroundPerception);
+  if (!tracks || tracks.length === 0) return null;
+  return (
+    <group>
+      {tracks.map((t) => (
+        <SurroundTrackBox key={t.id} track={t} />
+      ))}
     </group>
   );
 }
@@ -733,6 +789,7 @@ export function SimulationScene() {
             rider-app signature this phase is named for. */}
         <PlannerCandidatePaths />
         <PredictedAgentRibbons />
+        <SurroundPerceptionLayer />
         <PredictiveRiskTint />
         <ShieldOverrideIndicator />
 

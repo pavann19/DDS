@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { CommandPalette } from "../components/CommandPalette";
 
 export const metadata: Metadata = {
-  title: "DDS Autopilot Dashboard",
-  description: "Driving Decision Strategy — Real-time telemetry dashboard powered by XGBoost and exhaustive feature optimization.",
+  title: "DDS — Driving Decision System",
+  description:
+    "Operator console for the DDS autonomous-driving simulation: live World/Driver telemetry, perception, prediction, and safety-shield state.",
 };
-
-import { CommandPalette } from "../components/CommandPalette";
 
 export default function RootLayout({
   children,
@@ -15,11 +15,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className="font-sans antialiased bg-background text-foreground flex">
+      <body className="font-sans antialiased bg-background text-foreground">
         <CommandPalette />
-        <main className="flex-1 h-screen overflow-hidden">
-          {children}
-        </main>
+        <main className="h-screen overflow-hidden">{children}</main>
       </body>
     </html>
   );

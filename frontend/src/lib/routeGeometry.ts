@@ -96,7 +96,7 @@ export interface RoadRibbon {
 /** Builds a real road-surface ribbon mesh + lane-marking polylines from the
  * route geometry, so the rendered road actually shows the real route's
  * turns instead of a generic straight strip. Ported from the pre-P6-2
- * frontend's RoadMesh (frontend/src/app/components/DriveScene.tsx), which
+ * frontend's RoadMesh (a since-removed DriveScene component), which
  * solved the same "road folds/self-intersects at sharp turns" problem this
  * would otherwise hit: a naive symmetric perpendicular offset stretches by
  * 1/cos(turnAngle/2) and blows up approaching a hairpin. Clamping the miter
