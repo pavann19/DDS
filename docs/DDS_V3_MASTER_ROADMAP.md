@@ -277,39 +277,42 @@ rather than snaps. Both are *style* references, not parity claims; fidelity
 is legible-at-60-FPS low-poly, not photorealism (that's Phase 12).
 
 ### Scope
-- [ ] Tokens (incl. new **motion tokens**: `--ease-out`, `--dur*`,
+- [x] Tokens (incl. new **motion tokens**: `--ease-out`, `--dur*`,
   `--spring`) & `primitives/` (`Panel`, `Stat`, `Readout`, `Chip`,
-  `Meter`, `Disclosure`); delete the ad-hoc `bg-black/40` glass.
-- [ ] `console/ConsoleLayout` — top bar / 3D stage / right rail / bottom
+  `Meter`, `Disclosure`); ad-hoc glass deleted.
+- [x] `console/ConsoleLayout` — top bar / 3D stage / right rail / bottom
   strip on one always-mounted screen; `density` control (`focus` /
   `standard` / `inspect`) replaces the `activeMode` enum.
-- [ ] **Waymo-style stage** — rework `3d/SimulationScene.tsx`: extruded
-  route road + lane lines + horizon fade; low-poly ego + class-coloured
-  NPCs; per-track wireframe box + label card from
-  `heavy.surround_perception`; planned-path corridor ribbon + dimmed
-  candidates from `semantic.planner`; per-agent tapered forecast tubes
-  (intent-coloured) from `heavy.prediction`; ground risk wash;
-  spring-damped chase camera.
-- [ ] **Tesla-style overlay motion** — one `hud/DriveHUD` on primitives
+- [x] **Waymo-style stage** — `3d/SimulationScene.tsx`: route road +
+  lane lines (drei `<Line>`, real width); ego + class-coloured NPCs;
+  `SurroundPerceptionLayer` — per-track wireframe box + camera-facing
+  frosted label card from `heavy.surround_perception`; planned-path
+  corridor + dimmed candidates from `semantic.planner`; per-agent
+  intent-coloured forecast tubes from `heavy.prediction`; ground risk
+  wash; chase camera. (Camera stays lerp-damped, not spring — deferred.)
+- [x] **Tesla-style overlay motion** — one `hud/DriveHUD` on primitives
   (speed, target, `speed_limit_reason` binding constraint, steering,
-  predictive-slowdown chip); tween all numeric values (no digit-snap);
-  slide+fade panel expand/collapse; one-shot border pulse on state change;
-  full `prefers-reduced-motion` path. Delete the duplicate
-  `app/components/DriveHUD.tsx` + `DriveMode`'s inline overlay.
-- [ ] Channel-aligned panels, one component each importing its
-  `protocol.ts` type: `EgoControl` (`pose.ego`), `Perception`
-  (`semantic.perception` + `heavy.surround_perception`), `Prediction &
-  Intent` (`heavy.prediction` — intent bars, `p_cut_in` + TTC, per-agent
-  forecast list, risk summary, `proactive_decel_mps2`), `Safety Shield`
+  predictive-slowdown chip); numeric values tween (`useTween`); rail
+  panels slide+fade in (staggered); one-shot border pulse on state
+  change; global `prefers-reduced-motion` path. Duplicate HUD deleted.
+- [x] Channel-aligned panels (`console/RailPanels.tsx`): `Ego / Control`
+  (`pose.ego`), `Perception` (`semantic.perception` + `heavy.surround`),
+  `Prediction` (`heavy.prediction` — intent bars, `p_cut_in` + TTC,
+  per-agent forecast, `proactive_decel_mps2`), `Safety Shield`
   (`semantic.safety_shield`), `Planner` (`semantic.planner`),
-  `Driver Analytics` (`semantic.driver_analytics`, with the "does not drive
-  the vehicle" disclaimer).
-- [ ] `console/ScenarioStrip` — scenario state + event timeline +
-  pause/step/reset + destination; folds in `ScenarioControlRoom`.
-- [ ] Kill stale labels; move `decision`/`confidence` off the HUD into
-  `Driver Analytics`. Retire the `research` mode (fold to `inspect`) and
-  the dead "Deploy Experiment" stub.
-- [ ] Consolidate `src/app/components/` → `src/components/` (flat taxonomy).
+  `Driver Analytics` (`semantic.driver_analytics`, "does not drive the
+  vehicle" disclaimer). Each header tag names its bound channel;
+  `verify:ui` asserts the binding (see 7.5.3 note).
+- [x] `console/ScenarioStrip` — scenario state + transport
+  (pause/step/reset, Space) + live scenario quick-pick + destination;
+  folds in `ScenarioControlRoom` + `DestinationInput`. (Event *timeline*
+  deferred — needs the event stream surfaced in the store.)
+- [x] Stale labels killed; `decision`/`confidence` are Driver-Analytics
+  only, never on the HUD. `research` mode folded to `inspect` density;
+  mode system + `useUISettings` deleted.
+- [x] Legacy trees removed outright (`app/components/*`,
+  `components/modes`, `components/panels`, `components/charts`); 10
+  now-unused deps dropped.
 
 ### Gates
 - **7.5.1** `tsc --noEmit` exits 0.
@@ -333,6 +336,27 @@ is legible-at-60-FPS low-poly, not photorealism (that's Phase 12).
 - **7.5.10** 60 FPS at 1080p with 30 NPCs + forecast tubes + boxes at
   `standard` density (frame-time p95 < 16.7 ms; shares Phase 12 Gate
   12.1's harness once it exists).
+
+### Status — 2026-08-28 (branch `phase-7.5-ui-design`)
+Shipped in 6 commits (`378a598` → `efd1f15`), verified live against the
+running backend across all three densities.
+
+| Gate | State | Note |
+|---|---|---|
+| 7.5.1 | ✅ | `tsc --noEmit` 0; `eslint src` 0 (fixed 7 pre-existing `any`). |
+| 7.5.2 | ✅ | One HUD (`hud/DriveHUD`); `app/components/` **deleted**; glass-literal grep clean. |
+| 7.5.3 | ◑ | Panels live in `console/RailPanels.tsx` (not `panels/*Panel.tsx`) and read the typed store rather than importing `protocol.ts` directly. Replaced by a stronger check: `npm run verify:ui` asserts every `<PanelSection>` is bound to a real `pose.`/`semantic.`/`heavy.` channel. |
+| 7.5.4 | ✅ | `scripts/verify-ui-contract.mjs` denylist over the live tree — clean. |
+| 7.5.5 | ◑ | `Prediction` panel renders cut-in P/TTC, `proactive_decel_mps2`, per-agent intent at `inspect`. No fixture-payload component test — **no frontend test runner installed**; `verify:ui` is the stand-in. |
+| 7.5.6 | ✅ | `focus` = stage + HUD only; rail + strip unmounted. Verified. |
+| 7.5.7 | ✅ | Disclosure / DensityToggle / strip controls are real `<button>`s, keyboard-operable; no tabindex traps. |
+| 7.5.8 | ✅ | By construction — every box / card / corridor / tube is a store-field consequence; empty store → road + ego only. |
+| 7.5.9 | ✅ | Global `@media (prefers-reduced-motion: reduce)` collapses all transitions/animations; `useTween` / `useReducedMotion` short-circuit to the target value. |
+| 7.5.10 | ⏳ | Not measured — deferred to Phase 12 Gate 12.1's frame-time harness. |
+
+Deferred within 7.5: spring-damped camera (still lerp), scenario **event
+timeline** (needs the event stream in the store), fixture-based component
+tests (needs a test runner — Phase 8 tooling task).
 
 ---
 

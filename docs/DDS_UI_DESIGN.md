@@ -1,6 +1,10 @@
 # ADR-002: Restructure the DDS HMI into one honest AV-operator console
 
-**Status:** Proposed
+**Status:** Accepted — implemented 2026-08-28 on `phase-7.5-ui-design`
+(commits `378a598`…`efd1f15`). All 11 action items done; see the status
+table under `docs/DDS_V3_MASTER_ROADMAP.md` Phase 7.5 for per-gate state
+(7.5.3/7.5.5 met via `npm run verify:ui` in lieu of a frontend test
+runner; 7.5.10 deferred to the Phase 12 frame-time harness).
 **Date:** 2026-08-28
 **Deciders:** Project owner (sole maintainer)
 **Supersedes:** the three-mode HMI that grew organically through Phases 2–7
@@ -310,20 +314,20 @@ car drive better and will not be claimed to. What it does claim:
 Sequenced so each step is independently shippable and `tsc --noEmit` stays
 clean.
 
-1. [ ] **Tokens & primitives** — audit `globals.css`, add the missing
+1. [x] **Tokens & primitives** — audit `globals.css`, add the missing
    scale (spacing, radius, elevation, motion). Build `primitives/`:
    `Panel`, `PanelSection`, `Stat`, `Readout`, `Chip`, `Meter`,
    `Disclosure`. Delete the ad-hoc glass classes; the HUD's glass becomes a
    `hud/` primitive on tokens.
-2. [ ] **Console shell** — `console/ConsoleLayout.tsx`: top bar / stage /
+2. [x] **Console shell** — `console/ConsoleLayout.tsx`: top bar / stage /
    right rail / bottom strip grid, with the `density` control in a new
    `useConsole` store (replaces `useUISettings`'s mode enum). Single-column
    fallback under a breakpoint.
-3. [ ] **HUD** — one `hud/DriveHUD.tsx` on primitives: speed, target,
+3. [x] **HUD** — one `hud/DriveHUD.tsx` on primitives: speed, target,
    `speed_limit_reason` binding-constraint readout, steering, predictive
    -slowdown chip. Delete `app/components/DriveHUD.tsx` and `DriveMode`'s
    inline overlay.
-4. [ ] **Waymo-style stage** — rework `3d/SimulationScene.tsx` into the
+4. [x] **Waymo-style stage** — rework `3d/SimulationScene.tsx` into the
    visual language above: extruded route road with lane lines and horizon
    fade; low-poly ego + class-coloured NPC bodies; per-track wireframe
    bounding box + camera-facing label card (id/class/speed/range) from
@@ -331,31 +335,31 @@ clean.
    dimmed candidates from `semantic.planner`; per-agent **tapered forecast
    tubes** intent-coloured from `heavy.prediction`; ground risk wash;
    spring-damped chase camera. Desaturated world, bright semantics.
-5. [ ] **Channel-aligned panels** — one component each, each importing its
+5. [x] **Channel-aligned panels** — one component each, each importing its
    `protocol.ts` type: `EgoControlPanel` (`pose.ego`), `PerceptionPanel`
    (`semantic.perception` + `heavy.surround_perception`), `PredictionPanel`
    (`heavy.prediction` — intent bars, cut-in P + TTC, per-agent forecast
    list, risk summary), `SafetyPanel` (`semantic.safety_shield`),
    `PlannerPanel` (`semantic.planner`), `DriverAnalyticsPanel`
    (`semantic.driver_analytics`, with the disclaimer).
-6. [ ] **Tesla-style overlay motion** — add the motion tokens to
+6. [x] **Tesla-style overlay motion** — add the motion tokens to
    `globals.css`; tween all HUD/panel numeric values (no digit-snap);
    slide+fade panel expand/collapse on `--ease-out`; one-shot accent pulse
    on a panel's border for a state change; `--spring` steering indicator;
    full `prefers-reduced-motion` path.
-7. [ ] **Bottom strip** — `console/ScenarioStrip.tsx`: scenario state +
+7. [x] **Bottom strip** — `console/ScenarioStrip.tsx`: scenario state +
    event timeline (from the `"event"` messages) + pause/step/reset +
    destination input. Folds in `ScenarioControlRoom`.
-8. [ ] **Density wiring** — `focus` (HUD only) / `standard` (HUD + rail) /
+8. [x] **Density wiring** — `focus` (HUD only) / `standard` (HUD + rail) /
    `inspect` (all panels expanded, raw numbers, full `heavy` render incl.
    occupancy grid). Each panel reads `density` and renders accordingly.
-9. [ ] **Kill the stale labels** — remove `ai_decelerate` handling, rewrite
+9. [x] **Kill the stale labels** — remove `ai_decelerate` handling, rewrite
    `ShieldPanel`'s "AI Decision" framing, fix the Hz labels, move
    `decision`/`confidence` off the HUD into `DriverAnalyticsPanel`.
-10. [ ] **Panel-contract test** — `tsc`-checked assertion that every
+10. [x] **Panel-contract test** — `tsc`-checked assertion that every
    `panels/*Panel.tsx` imports a channel type from `protocol.ts`, plus the
    capability-claim denylist scan.
-11. [ ] **Retire `research` route or fold to `inspect`** — decide per the
+11. [x] **Retire `research` route or fold to `inspect`** — decide per the
    "what we'll revisit" note; remove the dead "Deploy Experiment" stub.
 
 **Acceptance gates**
