@@ -77,7 +77,6 @@ export function ManeuverCard() {
             Planner · deterministic
           </span>
           <h1
-            key={m.title}
             style={{
               fontFamily: 'var(--font-display)',
               fontSize: compact ? 18 : 22,
@@ -86,7 +85,7 @@ export function ManeuverCard() {
               color: 'var(--text-bright)',
               textShadow: `0 0 20px color-mix(in srgb, ${accent} 25%, transparent)`,
               textTransform: 'uppercase',
-              animation: 'dds-grow var(--dur) var(--ease-out)',
+              transition: 'color var(--dur) var(--ease-out)',
             }}
           >
             {m.title}

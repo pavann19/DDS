@@ -53,9 +53,8 @@ export function ConsoleLayout({ hud, rail, card, strip }: ConsoleLayoutProps) {
       <div
         style={{
           position: 'absolute',
-          top: 'var(--space-4)',
+          top: `calc(var(--space-4) + 74px + var(--space-2))`,
           right: focus ? 'var(--space-5)' : `calc(${RAIL_W}px + var(--space-6))`,
-          transform: 'translateY(calc(100% + var(--space-2)))',
           display: 'flex',
           alignItems: 'center',
           gap: 'var(--space-2)',

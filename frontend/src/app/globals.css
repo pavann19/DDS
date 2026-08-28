@@ -11,10 +11,10 @@
   /* --- surfaces --- */
   --bg-app: #07090E;
   --bg-panel: #0D1118;
-  --bg-surface: rgba(18, 24, 36, 0.55);
-  --bg-card: rgba(18, 24, 36, 0.6);
-  --bg-frost: rgba(11, 15, 22, 0.78);   /* HUD / rail glass over the 3D stage */
-  --bg-inset: rgba(255, 255, 255, 0.03);
+  --bg-surface: rgba(20, 26, 38, 0.72);
+  --bg-card: rgba(16, 21, 32, 0.82);
+  --bg-frost: rgba(9, 12, 19, 0.9);   /* HUD / rail glass over the 3D stage */
+  --bg-inset: rgba(255, 255, 255, 0.04);
 
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-default: rgba(255, 255, 255, 0.12);
@@ -118,10 +118,13 @@ canvas { touch-action: none; }
 /* The one glass surface — every floating console panel uses it. */
 .dds-glass {
   background: var(--bg-frost);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
   border: 1px solid var(--border-subtle);
   box-shadow: var(--elev-frost);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dds-glass { background: #0B0F16; }
 }
 
 :focus-visible {

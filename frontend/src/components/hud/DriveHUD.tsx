@@ -105,7 +105,6 @@ export function DriveHUD() {
       {/* ---- centre: autonomous-state pill + steering ---- */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
         <div
-          key={state.id}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -114,7 +113,7 @@ export function DriveHUD() {
             borderRadius: 'var(--radius-pill)',
             background: `color-mix(in srgb, ${toneColor[state.tone]} 12%, transparent)`,
             border: `1px solid color-mix(in srgb, ${toneColor[state.tone]} 45%, transparent)`,
-            animation: 'dds-grow var(--dur) var(--ease-out)',
+            transition: 'background var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out)',
           }}
         >
           <span
