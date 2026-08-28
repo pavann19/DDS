@@ -1,71 +1,129 @@
 @import "tailwindcss";
 
 :root {
-  /* DDS 2.0 Color Palette */
+  /* ============================================================
+     DDS console tokens — the ONLY colour / spacing / motion source
+     (ADR-002). Components read these via var(); no ad-hoc literals.
+     Deliberately a single dark visual world: an AV cockpit UI.
+     ============================================================ */
+
+  /* --- surfaces --- */
   --bg-app: #0A0D12;
   --bg-panel: #12161E;
   --bg-surface: #1A1F2B;
-  
+  --bg-frost: rgba(9, 12, 17, 0.62);   /* HUD / rail panels over the 3D stage */
+
   --border-subtle: #1A1F2B;
   --border-default: #2A303C;
+  --border-strong: #333B49;
   --border-focus: #3A4250;
-  
+
+  /* --- ink --- */
+  --text-faint: #5A6474;
   --text-muted: #94a3b8;
   --text-primary: #CBD5E1;
   --text-bright: #F8FAFC;
-  
-  /* Semantic Tokens */
+
+  /* --- accent (one) --- */
   --brand: #00E5FF;
-  --brand-muted: rgba(0, 229, 255, 0.2);
-  
+  --brand-muted: rgba(0, 229, 255, 0.18);
+  --brand-dim: #0A6E7C;
+  --brand-ink: #04222A;               /* text on a brand fill */
+
+  /* --- semantic state (separate from the accent) --- */
   --success: #00FF88;
-  --success-muted: rgba(0, 255, 136, 0.2);
-  
+  --success-muted: rgba(0, 255, 136, 0.16);
   --warning: #FFAB00;
-  --warning-muted: rgba(255, 171, 0, 0.2);
-  
+  --warning-muted: rgba(255, 171, 0, 0.14);
   --critical: #FF3D00;
-  --critical-muted: rgba(255, 61, 0, 0.2);
+  --critical-muted: rgba(255, 61, 0, 0.16);
+
+  /* --- spacing scale (4px base) --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+
+  /* --- radius --- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 9px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* --- elevation --- */
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --elev-2: 0 8px 24px -8px rgba(0, 0, 0, 0.55);
+  --elev-frost: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 12px 30px -14px rgba(0, 0, 0, 0.7);
+
+  /* --- motion (Tesla-smooth overlay: things ease, they don't snap) --- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 140ms;
+  --dur: 240ms;
+  --dur-slow: 420ms;
+  --spring: 520ms cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* --- type --- */
+  --font-sans: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
 @theme inline {
   --color-background: var(--bg-app);
   --color-foreground: var(--text-primary);
-  
   --color-brand: var(--brand);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-critical: var(--critical);
-  
-  --font-sans: "Segoe UI", Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #1a1a2e transparent;
+  scrollbar-color: var(--border-default) transparent;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg-app);
+  color: var(--text-primary);
   font-family: var(--font-sans);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Smooth scrollbar for webkit browsers */
-::-webkit-scrollbar {
-  width: 4px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #1a1a2e;
-  border-radius: 4px;
-}
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: var(--radius-xs); }
 
 /* Canvas rendering hint */
-canvas {
-  touch-action: none;
+canvas { touch-action: none; }
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* One-shot accent pulse a panel plays when its subsystem changes state
+   (shield override, cut-in engaged). Add/remove the `.pulse` class. */
+@keyframes dds-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--pulse-color, var(--brand-muted)); }
+  100% { box-shadow: 0 0 0 6px transparent; }
+}
+
+/* Tesla-smooth means reduced-motion is a real path, not an afterthought:
+   every transition/animation collapses, values update instantly. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
