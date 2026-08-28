@@ -4,6 +4,7 @@ import React, { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { PerspectiveCamera, Grid, Html, Line } from '@react-three/drei';
 import { useSimulationStore } from '../../store/useSimulationStore';
+import { useConsole } from '../../store/useConsole';
 import * as THREE from 'three';
 import { CarFront } from 'lucide-react';
 import {
@@ -73,6 +74,13 @@ const sharedVehicleState = {
 function headingToForward(headingRad: number): THREE.Vector3 {
   return new THREE.Vector3(Math.sin(headingRad), 0, -Math.cos(headingRad));
 }
+
+/** Allocation-free variant for hot loops. */
+function headingToForwardInto(out: THREE.Vector3, headingRad: number): THREE.Vector3 {
+  return out.set(Math.sin(headingRad), 0, -Math.cos(headingRad));
+}
+const FWD_A = new THREE.Vector3();
+const FWD_B = new THREE.Vector3();
 
 function useRouteGeometry(): RouteGeometry | null {
   const routeWaypoints = useSimulationStore((state) => state.routeWaypoints);
@@ -224,6 +232,10 @@ function LidarRadarSweep() {
 
   useFrame((state) => {
     if (!ringRef.current) return;
+    // §18 — no decorative constant animation: the sweep only runs while
+    // the forward sensor actually has a detection to resolve.
+    ringRef.current.visible = !!leadDetection;
+    if (!leadDetection) return;
     ringRef.current.position.x = sharedVehicleState.x;
     ringRef.current.position.z = sharedVehicleState.z;
 
@@ -245,7 +257,7 @@ function LidarRadarSweep() {
   });
 
   return (
-    <mesh ref={ringRef} position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+    <mesh ref={ringRef} position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
       <ringGeometry args={[RADAR_BASE_RING_RADIUS, RADAR_BASE_RING_RADIUS * 1.075, 32]} />
       <meshBasicMaterial color={THEME.brandCyan} transparent opacity={0.35} side={THREE.DoubleSide} />
     </mesh>
@@ -538,7 +550,11 @@ function PlannerCandidatePaths() {
   const ego = useSimulationStore((state) => state.ego);
   const planner = useSimulationStore((state) => state.planner);
   const routeGeom = useRouteGeometry();
+  const density = useConsole((s) => s.density);
 
+  // §14 — focus keeps only the chosen plan; the scored alternatives are a
+  // standard / inspect detail.
+  if (density === 'focus') return null;
   if (!routeGeom || !ego || !planner || planner.candidates.length === 0) return null;
 
   const startS = ego.frenet.s;
@@ -597,30 +613,37 @@ const INTENT_COLOR: Record<string, string> = {
 
 function PredictedAgentRibbons() {
   const prediction = useSimulationStore((state) => state.prediction);
-  if (!prediction || prediction.agents.length === 0) return null;
+
+  // Build the Vector3 trails once per prediction update, not every render.
+  const lines = useMemo(() => {
+    if (!prediction || prediction.agents.length === 0) return [];
+    return prediction.agents
+      .filter((agent) => agent.trail && agent.trail.length >= 2)
+      .map((agent) => ({
+        key: agent.track_id,
+        points: agent.trail.map((p) => new THREE.Vector3(p.x, 0.16, p.z)),
+        color: INTENT_COLOR[agent.intent[0]?.label ?? 'LANE_KEEP'] ?? THEME.npcTaillight,
+        isCutIn: prediction.cut_in.active && prediction.cut_in.track_id === agent.track_id,
+      }));
+  }, [prediction]);
+
+  if (lines.length === 0) return null;
 
   return (
     <group>
-      {prediction.agents.map((agent) => {
-        if (!agent.trail || agent.trail.length < 2) return null;
-        const points = agent.trail.map((p) => new THREE.Vector3(p.x, 0.16, p.z));
-        const dominant = agent.intent[0]?.label ?? 'LANE_KEEP';
-        const color = INTENT_COLOR[dominant] ?? THEME.npcTaillight;
-        const isCutInAgent = prediction.cut_in.active && prediction.cut_in.track_id === agent.track_id;
-        return (
-          <Line
-            key={`forecast-${agent.track_id}`}
-            points={points}
-            color={color}
-            lineWidth={isCutInAgent ? 4.5 : 2.5}
-            transparent
-            opacity={isCutInAgent ? 0.95 : 0.5}
-            dashed={!isCutInAgent}
-            dashSize={0.9}
-            gapSize={0.5}
-          />
-        );
-      })}
+      {lines.map(({ key, points, color, isCutIn }) => (
+        <Line
+          key={`forecast-${key}`}
+          points={points}
+          color={color}
+          lineWidth={isCutIn ? 4.5 : 2.5}
+          transparent
+          opacity={isCutIn ? 0.95 : 0.5}
+          dashed={!isCutIn}
+          dashSize={0.9}
+          gapSize={0.5}
+        />
+      ))}
     </group>
   );
 }
@@ -863,17 +886,20 @@ function SurroundPerceptionLayer() {
   const perception = useSimulationStore((state) => state.perception);
   const planner = useSimulationStore((state) => state.planner);
   const ego = useSimulationStore((state) => state.ego);
+  const density = useConsole((s) => s.density);
 
   const annotated = useMemo(() => {
     if (!tracks || tracks.length === 0) return [];
-    return annotateTracks(tracks, {
+    const all = annotateTracks(tracks, {
       egoHeadingRad: sharedVehicleState.headingRad,
       prediction,
       perception,
       egoLateralM: ego?.frenet?.d ?? 0,
       laneChanging: Boolean(planner?.is_changing_lane),
     });
-  }, [tracks, prediction, perception, planner, ego]);
+    // §14 — focus shows only what matters to the vehicle right now.
+    return density === 'focus' ? all.filter((a) => a.relevance === 'primary') : all;
+  }, [tracks, prediction, perception, planner, ego, density]);
 
   if (annotated.length === 0) return null;
   return (
@@ -909,8 +935,8 @@ function ChaseCamera() {
 
     const camHeadingR = sharedVehicleState.headingRad - anticip.current * 0.6;
     const lookHeadingR = sharedVehicleState.headingRad - anticip.current;
-    const back = headingToForward(camHeadingR);
-    const fwd = headingToForward(lookHeadingR);
+    const back = headingToForwardInto(FWD_A, camHeadingR);
+    const fwd = headingToForwardInto(FWD_B, lookHeadingR);
 
     const vX = sharedVehicleState.x;
     const vZ = sharedVehicleState.z;
