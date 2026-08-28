@@ -398,6 +398,8 @@ untracked). Data wiring, honesty derivations (`roles.ts`,
 | M | Bottom-centre **maneuver card** — the honest version of the reference's "AI PLANNER DECISION" card: **no confidence gauge** (deterministic planner, ADR-001); title = plain maneuver from `speed_limit_reason` + `is_changing_lane` + `cut_in`; factors = only real observed conditions; ACCEL/STEER/TARGET badges from the ego channel; compacts in `focus`. `deriveManeuver()` added. | — |
 | N | Scenario bar → "🎬 SCENARIO" + scrolling pill picks + icon playback buttons; SimulationScene gets ACESFilmic tone-mapping + exponential fog + cyan rim light; surround-track labels restyled to glass tags with a pointer. | — |
 
+| road | **Engineer the road geometry** (`routeGeometry.ts`): the rendered road was the raw OSRM polyline — ~90° cusps at every junction, no turn radius, vehicles snapping heading through corners ("turning like toys"). Now a centripetal Catmull-Rom is fit through the waypoints (same technique as the reference proving-ground road) and resampled uniformly at ~2 m, so every corner is a swept arc with a continuous tangent; cached tangents keep per-frame lookups cheap. Ribbon widened to a ~17.6 m 4-lane cross-section. `approachHeading()` in `SimulationScene` — shortest-arc heading easing with a hard yaw-rate cap (~92°/s) for ego / NPCs / track boxes, so a big station step can't pivot a car in place. Station `s` still maps by arc length (smoothing shortcuts corners by ≤ a few m over a multi-km route). | — |
+
 Verified live across `focus` / `standard` / `inspect`. Preview-only note:
 the embedded browser doesn't composite `backdrop-filter`, so glass
 opacity is set high (~0.92) for legibility there; real Chrome renders the
