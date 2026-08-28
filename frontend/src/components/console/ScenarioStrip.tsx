@@ -37,6 +37,7 @@ const btn: React.CSSProperties = {
   border: '1px solid var(--border-default)',
   borderRadius: 'var(--radius-sm)',
   cursor: 'pointer',
+  whiteSpace: 'nowrap',
 };
 
 export function ScenarioStrip() {

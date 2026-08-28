@@ -11,10 +11,10 @@ import { useTween } from '../../hooks/useTween';
 const CONSTRAINT: Record<string, string> = {
   cruise: 'cruising',
   car_following: 'following traffic (IDM)',
-  lateral_accel_limit: 'cornering — lateral-accel cap',
+  lateral_accel_limit: 'lateral-accel cap',
   tracking_correction: 'correcting heading',
-  predictive_cut_in: 'easing off — predicted cut-in',
-  safety_shield_override: 'safety shield override',
+  predictive_cut_in: 'predicted cut-in',
+  safety_shield_override: 'safety-shield override',
 };
 
 /** The one HUD. Frosted, minimal, values glide (Tesla-smooth). */
@@ -42,7 +42,7 @@ export function DriveHUD() {
         <Stat value={Math.round(speedKmh)} unit="KM/H" size="lg" />
         <div
           className="font-mono"
-          style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}
+          style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, whiteSpace: 'nowrap' }}
         >
           target {targetKmh}
           <span style={{ color: 'var(--text-faint)' }}> &middot; </span>
