@@ -42,7 +42,7 @@ function useCtx(): ConsoleCtx {
 function EgoControlPanel({ index, salience }: { index: number; salience: Salience }) {
   const ego = useSimulationStore((s) => s.ego);
   const open = useForcedOpen();
-  const speed = useTween((ego?.velocity ?? 0) * 3.6, 240);
+  const speed = Math.max(0, useTween((ego?.velocity ?? 0) * 3.6, 240));
   const d = ego?.frenet?.d ?? 0;
   const laneDesc = Math.abs(d) < 1 ? 'lane centre' : d < -1.6 ? 'left / overtake lane' : d > 1.6 ? 'right lane' : 'lane transition';
   return (

@@ -23,7 +23,7 @@ export function DriveHUD() {
   const prediction = useSimulationStore((s) => s.prediction);
   const planner = useSimulationStore((s) => s.planner);
 
-  const speedKmh = useTween((ego?.velocity ?? 0) * 3.6, 260);
+  const speedKmh = Math.max(0, useTween((ego?.velocity ?? 0) * 3.6, 260));
   const targetKmh = Math.round((ego?.target_velocity ?? 0) * 3.6);
   const steerDeg = (ego?.steering_angle ?? 0) * (180 / Math.PI);
 
