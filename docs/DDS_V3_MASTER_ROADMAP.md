@@ -254,6 +254,60 @@ braking on merges.
 
 ---
 
+## Phase 7.5 — HMI restructure: one honest AV-operator console
+**Estimate:** ~20–30h
+**Full rationale and options analysis:** `docs/DDS_UI_DESIGN.md` (ADR-002).
+**Core problem:** the frontend accreted screen by screen (same organic
+growth ADR-001 fixed for the backend). Four structural issues: two visual
+languages + two HUDs + two component dirs; labels the backend no longer
+backs (`ai_decelerate`, "AI Decision", "30Hz"); Phase 7's prediction data
+has almost no surface; the three modes are mutually-exclusive full-screen
+takeovers that never use the protocol v3 channel split.
+
+This delivers **no new driving behaviour**. It is the interface foundation
+Phases 8–13 render into.
+
+### Scope
+- [ ] Tokens & `primitives/` (`Panel`, `Stat`, `Readout`, `Chip`, `Meter`,
+  `Disclosure`); delete the ad-hoc `bg-black/40` glass.
+- [ ] `console/ConsoleLayout` — top bar / 3D stage / right rail / bottom
+  strip on one always-mounted screen; `density` control (`focus` /
+  `standard` / `inspect`) replaces the `activeMode` enum.
+- [ ] One `hud/DriveHUD` on primitives (speed, target, `speed_limit_reason`
+  binding constraint, steering, predictive-slowdown chip); delete the
+  duplicate `app/components/DriveHUD.tsx` + `DriveMode`'s inline overlay.
+- [ ] Channel-aligned panels, one component each importing its
+  `protocol.ts` type: `EgoControl` (`pose.ego`), `Perception`
+  (`semantic.perception` + `heavy.surround_perception`), `Prediction &
+  Intent` (`heavy.prediction` — intent bars, `p_cut_in` + TTC, per-agent
+  forecast list, risk summary, `proactive_decel_mps2`), `Safety Shield`
+  (`semantic.safety_shield`), `Planner` (`semantic.planner`),
+  `Driver Analytics` (`semantic.driver_analytics`, with the "does not drive
+  the vehicle" disclaimer).
+- [ ] `console/ScenarioStrip` — scenario state + event timeline +
+  pause/step/reset + destination; folds in `ScenarioControlRoom`.
+- [ ] Kill stale labels; move `decision`/`confidence` off the HUD into
+  `Driver Analytics`. Retire the `research` mode (fold to `inspect`) and
+  the dead "Deploy Experiment" stub.
+- [ ] Consolidate `src/app/components/` → `src/components/` (flat taxonomy).
+
+### Gates
+- **7.5.1** `tsc --noEmit` exits 0.
+- **7.5.2** Exactly one HUD component; `src/app/components/` empty; grep for
+  `bg-black/4` / `border-white/1` literals in `src/` is clean.
+- **7.5.3** Every `src/components/panels/*Panel.tsx` imports ≥1 type from
+  `types/protocol` — panel-contract test passes.
+- **7.5.4** Capability-claim denylist scan over `src/` is clean
+  (`LiDAR`/`Vision`/`camera`/`neural`/`AI decides` only inside a marked
+  disclaimer).
+- **7.5.5** `Prediction & Intent` panel renders every `PredictionState`
+  field at `inspect` density — component test against a fixture payload.
+- **7.5.6** `focus` density is layout-equivalent to today's Drive mode
+  (stage + HUD only) — rendered-DOM snapshot.
+- **7.5.7** Keyboard-operable end to end; no `tabindex` traps.
+
+---
+
 ## Phase 8 — Unified Spatiotemporal (s, d, t) Motion Planning
 **Estimate:** ~25–40h
 **Core problem:** lateral candidate selection and longitudinal speed control
@@ -431,9 +485,11 @@ behavior (tailgating, weaving, shockwaves).
 |---|---|---|---|---|
 | Baseline | Phases 1-5 | — | 168 | 168/168, tsc clean |
 | 6 | Perception + EKF tracking | +21 | 189 | blind-spot detect, <2ms |
-| 6.5 | World/Driver architecture (partial; items 5/7 → P7) | +36 | 225 | 189 unchanged + bit-identical replay |
-| 7 | Trajectory prediction (backend done; ribbon UI pending) | +34 | 259 | ≥1.2s cut-in warning |
-| 8 | Spatiotemporal planner | +20 | 221 | mid-maneuver abort |
+| 6.5 | World/Driver architecture (all 8 items; 6.5.3/6.5.4 pragmatic) | +40 | 229 | 189 unchanged + bit-identical replay + tsc |
+| 7 | Trajectory prediction + intent + risk field + ribbon UI | +34 | 263 | ≥1.2s cut-in warning |
+| 7.x | Hardening 1–7: committed ML artifacts, perf gates measured, defensive guards | +9 | 270 | 270 pass / 2 skip (pinned toolchain) |
+| 7.5 | HMI restructure — one honest AV console (ADR-002) | frontend | 270 | tsc clean, panel-contract test, denylist scan |
+| 8 | Spatiotemporal planner | +20 | 290 | mid-maneuver abort |
 | 9 | Dynamic tire physics | +16 | 237 | step-steer, ABS |
 | 10 | Semantic map + intersections | +22 | 259 | 0 stop-line overruns |
 | 11 | RSS safety + MRM | +18 | 277 | 0 at-fault (defined set) |
@@ -442,11 +498,15 @@ behavior (tailgating, weaving, shockwaves).
 
 ## Execution order
 
-Sequential. Phase 6 (perception) is complete. **Phase 6.5 (the World/Driver
-architectural restructure, ADR-001 in `docs/DDS_ARCHITECTURE.md`) comes
-next** — before Phase 7, because Phases 9, 11 and 13 are structurally
-blocked without it and every phase built on the current monolith increases
-the cost of doing it later.
+Sequential. Phases 1–7 are shipped and merged to `master` (Phase 6.5 =
+the World/Driver restructure, ADR-001 in `docs/DDS_ARCHITECTURE.md`), plus
+a hardening pass over 1–7. **Phase 7.5 (the HMI restructure, ADR-002 in
+`docs/DDS_UI_DESIGN.md`) comes next** — before Phase 8, for the same reason
+6.5 preceded 7: the frontend accreted screen by screen, Phase 7's
+prediction data has no proper surface, and every remaining phase (8–13)
+adds a panel that currently has no consistent home. Phase 7.5 delivers no
+new driving behaviour; it is the interface foundation the rest renders
+into.
 
 Each phase is built, its own tests written and passing, and live-verified
 before moving to the next — no phase is marked complete on partial coverage.
