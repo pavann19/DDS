@@ -8,6 +8,7 @@ import { ConsoleLayout } from '../components/console/ConsoleLayout';
 import { Rail } from '../components/console/RailPanels';
 import { ScenarioStrip } from '../components/console/ScenarioStrip';
 import { DriveHUD } from '../components/hud/DriveHUD';
+import { ManeuverCard } from '../components/hud/ManeuverCard';
 
 export default function Home() {
   const { sendCommand } = useTelemetry('ws://localhost:8000/ws/telemetry');
@@ -26,7 +27,12 @@ export default function Home() {
       <SimulationScene />
 
       {/* One console surface (ADR-002): stage passthrough + HUD + rail + strip. */}
-      <ConsoleLayout hud={<DriveHUD />} rail={<Rail />} strip={<ScenarioStrip />} />
+      <ConsoleLayout
+        hud={<DriveHUD />}
+        rail={<Rail />}
+        card={<ManeuverCard />}
+        strip={<ScenarioStrip />}
+      />
     </main>
   );
 }
