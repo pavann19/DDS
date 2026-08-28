@@ -19,6 +19,10 @@ import { annotateTracks, ROLE_LABEL, type AnnotatedTrack, type TrackRole } from 
 const UNIT_EDGES = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
 const EMPTY_GEOM = new THREE.BufferGeometry();
 
+// Reusable scratch vectors for the camera loop (no per-frame allocation).
+const CAM_POS = new THREE.Vector3();
+const CAM_LOOK = new THREE.Vector3();
+
 // Real pixel-width lines: native THREE.Line/lineBasicMaterial's `linewidth`
 // is capped at 1px on most GPUs/browsers (a long-standing WebGL
 // limitation), which makes "dimmed alternative vs. highlighted chosen
@@ -621,31 +625,80 @@ function PredictedAgentRibbons() {
   );
 }
 
-// --- 4c-ii. Predictive risk tint: a soft amber ground halo under the ego
-// while the prediction stage is running its comfort-bounded proactive
-// slowdown for a developing cut-in (speed_limit_reason "predictive_cut_in").
-// Distinct from ShieldOverrideIndicator's red emergency halo -- this fires
-// EARLIER and is not an override. ---
-function PredictiveRiskTint() {
-  const prediction = useSimulationStore((state) => state.prediction);
-  const ringRef = useRef<THREE.Mesh>(null);
-  const active = !!prediction && prediction.cut_in.active;
+// --- 4c-ii. Spatial risk region (§10): instead of washing the whole
+// ground, place a localized patch *between the ego and the actual threat*
+// and stretch it along that line. The threat is the real cut-in agent
+// (Phase 7 cut_in.track_id) or, failing that, the nearest closing track
+// while the safety shield reports MEDIUM+ risk. Intensity scales with
+// cut_in.probability / risk_level. Silent when risk is NONE. ---
+const RISK_RANK: Record<string, number> = { NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 };
+
+function SpatialRiskRegion() {
+  const prediction = useSimulationStore((s) => s.prediction);
+  const shield = useSimulationStore((s) => s.safetyShield);
+  const tracks = useSimulationStore((s) => s.surroundPerception);
+
+  const patchRef = useRef<THREE.Mesh>(null);
+
+  // Resolve the threat position (local x/z) + a 0..1 severity.
+  const threat = useMemo(() => {
+    const cutInId = prediction?.cut_in.active ? prediction.cut_in.track_id : null;
+    const risk = shield?.risk_level ?? 'NONE';
+    const riskRank = RISK_RANK[risk] ?? 0;
+
+    let pos: { x: number; z: number } | null = null;
+    let severity = 0;
+
+    if (cutInId != null) {
+      const t = tracks.find((tr) => tr.id.match(/(\d+)/)?.[1] === String(cutInId));
+      if (t) {
+        pos = { x: t.x, z: t.z };
+        severity = Math.max(0.4, prediction?.cut_in.probability ?? 0.5);
+      }
+    }
+    if (!pos && riskRank >= 2 && tracks.length) {
+      // nearest track ahead-ish as the shield's implied threat
+      let best = Infinity;
+      for (const t of tracks) {
+        if (Math.abs(((t.azimuth_deg + 180) % 360) - 180) > 60) continue;
+        if (t.range_m < best) {
+          best = t.range_m;
+          pos = { x: t.x, z: t.z };
+        }
+      }
+      severity = riskRank / 4;
+    }
+    return pos ? { pos, severity } : null;
+  }, [prediction, shield, tracks]);
 
   useFrame((state) => {
-    if (!ringRef.current) return;
-    ringRef.current.visible = active;
-    if (!active) return;
-    ringRef.current.position.x = sharedVehicleState.x;
-    ringRef.current.position.z = sharedVehicleState.z;
-    const pulse = (Math.sin(state.clock.elapsedTime * 5) + 1) / 2;
-    const p = prediction?.cut_in.probability ?? 0;
-    (ringRef.current.material as THREE.MeshBasicMaterial).opacity = 0.14 + pulse * 0.12 + p * 0.14;
+    const m = patchRef.current;
+    if (!m) return;
+    if (!threat) {
+      m.visible = false;
+      return;
+    }
+    m.visible = true;
+    const ex = sharedVehicleState.x;
+    const ez = sharedVehicleState.z;
+    const dx = threat.pos.x - ex;
+    const dz = threat.pos.z - ez;
+    const dist = Math.hypot(dx, dz) || 1;
+    // patch centred ~60% of the way to the threat, aligned along the line
+    m.position.set(ex + dx * 0.6, 0.03, ez + dz * 0.6);
+    m.rotation.set(-Math.PI / 2, 0, -Math.atan2(dx, dz));
+    const pulse = (Math.sin(state.clock.elapsedTime * 4) + 1) / 2;
+    const s = threat.severity;
+    m.scale.set(3 + s * 3, Math.min(dist * 0.7, 6 + s * 10), 1);
+    const mat = m.material as THREE.MeshBasicMaterial;
+    mat.color.set(s > 0.75 ? THEME.detectedCritical : THEME.detectedWarning);
+    mat.opacity = 0.1 + s * 0.16 + pulse * 0.06 * s;
   });
 
   return (
-    <mesh ref={ringRef} position={[0, 0.025, 0]} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
-      <ringGeometry args={[3.4, 9.0, 48]} />
-      <meshBasicMaterial color={THEME.detectedWarning} transparent opacity={0.2} side={THREE.DoubleSide} />
+    <mesh ref={patchRef} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
+      <circleGeometry args={[1, 32]} />
+      <meshBasicMaterial color={THEME.detectedWarning} transparent opacity={0} side={THREE.DoubleSide} depthWrite={false} />
     </mesh>
   );
 }
@@ -832,45 +885,53 @@ function SurroundPerceptionLayer() {
   );
 }
 
-// --- 6. Smooth Tesla-Style Chase Camera ---
-function SynchronizedChaseCamera() {
-  const cameraInitialized = useRef(false);
+// --- 6. Anticipatory chase camera (§4): keeps the existing damped-lerp
+// architecture (no spring dynamics) but looks *into* the upcoming curve
+// rather than trailing the vehicle's past heading. The anticipation angle
+// is a low-pass-filtered blend of the ego's real steering angle and the
+// route's curvature ahead; follow distance and height ease up gently with
+// speed. Horizon stays fixed. ---
+function ChaseCamera() {
+  const steering = useSimulationStore((s) => s.ego?.steering_angle ?? 0);
+  const curvature = useSimulationStore((s) => s.planner?.curvature ?? 0);
+  const speedMps = useSimulationStore((s) => s.ego?.velocity ?? 0);
+
+  const initialized = useRef(false);
+  const anticip = useRef(0); // filtered anticipation yaw (rad)
 
   useFrame((state, delta) => {
     if (!sharedVehicleState.initialized) return;
 
-    const forward = headingToForward(sharedVehicleState.headingRad);
+    // Anticipation: steering dominates in tight manoeuvres, curvature adds
+    // the road's own bend. Signs chosen so the camera leads into the turn.
+    const target = THREE.MathUtils.clamp(steering * 1.6 + Math.sign(steering || 1) * curvature * 14, -0.5, 0.5);
+    anticip.current = THREE.MathUtils.lerp(anticip.current, target, Math.min(1, delta * 2.2));
+
+    const camHeadingR = sharedVehicleState.headingRad - anticip.current * 0.6;
+    const lookHeadingR = sharedVehicleState.headingRad - anticip.current;
+    const back = headingToForward(camHeadingR);
+    const fwd = headingToForward(lookHeadingR);
+
     const vX = sharedVehicleState.x;
     const vZ = sharedVehicleState.z;
 
-    // Chase from behind along the vehicle's REAL forward direction (not a
-    // fixed world-Z offset, which only looked right when every route
-    // rendered as a straight corridor along Z).
-    const camDist = 13.5;
-    const camHeight = 5.6;
-    const lookAheadDist = 18.0;
+    const spd = THREE.MathUtils.clamp(speedMps, 0, 25);
+    const camDist = 12 + spd * 0.28;          // 12 → ~19 m
+    const camHeight = 5.0 + spd * 0.05;        // 5.0 → ~6.25 m
+    const lookAhead = 16 + spd * 0.5 + Math.abs(anticip.current) * 22;
 
-    const targetCamPos = new THREE.Vector3(
-      vX - forward.x * camDist,
-      camHeight,
-      vZ - forward.z * camDist,
-    );
-    const targetLookAt = new THREE.Vector3(
-      vX + forward.x * lookAheadDist,
-      0.9,
-      vZ + forward.z * lookAheadDist,
-    );
+    CAM_POS.set(vX - back.x * camDist, camHeight, vZ - back.z * camDist);
+    CAM_LOOK.set(vX + fwd.x * lookAhead, 1.0, vZ + fwd.z * lookAhead);
 
-    if (!cameraInitialized.current) {
-      state.camera.position.copy(targetCamPos);
-      state.camera.lookAt(targetLookAt);
-      cameraInitialized.current = true;
+    if (!initialized.current) {
+      state.camera.position.copy(CAM_POS);
+      state.camera.lookAt(CAM_LOOK);
+      initialized.current = true;
       return;
     }
 
-    const alpha = Math.min(1, delta * 6);
-    state.camera.position.lerp(targetCamPos, alpha);
-    state.camera.lookAt(targetLookAt);
+    state.camera.position.lerp(CAM_POS, Math.min(1, delta * 3.2));
+    state.camera.lookAt(CAM_LOOK);
   });
 
   return null;
@@ -920,13 +981,13 @@ export function SimulationScene() {
         <PlannerCandidatePaths />
         <PredictedAgentRibbons />
         <SurroundPerceptionLayer />
-        <PredictiveRiskTint />
+        <SpatialRiskRegion />
         <ShieldOverrideIndicator />
 
         {/* Dynamic Vehicles */}
         <EgoVehicle />
         <TrafficManager />
-        <SynchronizedChaseCamera />
+        <ChaseCamera />
       </Canvas>
     </div>
   );
