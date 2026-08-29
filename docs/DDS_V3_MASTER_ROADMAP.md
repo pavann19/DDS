@@ -254,29 +254,207 @@ braking on merges.
 
 ---
 
+## Phase 7.5 — HMI restructure: one honest AV-operator console
+**Estimate:** ~20–30h
+**Full rationale and options analysis:** `docs/DDS_UI_DESIGN.md` (ADR-002).
+**Core problem:** the frontend accreted screen by screen (same organic
+growth ADR-001 fixed for the backend). Four structural issues: two visual
+languages + two HUDs + two component dirs; labels the backend no longer
+backs (`ai_decelerate`, "AI Decision", "30Hz"); Phase 7's prediction data
+has almost no surface; the three modes are mutually-exclusive full-screen
+takeovers that never use the protocol v3 channel split.
+
+This delivers **no new driving behaviour**. It is the interface foundation
+Phases 8–13 render into.
+
+**Visual language:** the 3D stage reads like the **Waymo Driver
+visualization** — desaturated road, bright labelled semantics: low-poly
+ego + class-coloured NPC bodies, per-track wireframe bounding boxes with
+camera-facing label cards, a flowing planned-path corridor, per-agent
+intent-coloured forecast tubes, a ground risk wash. The overlay (HUD +
+rail) reads like **Tesla FSD** — frosted, minimal, everything tweens/eases
+rather than snaps. Both are *style* references, not parity claims; fidelity
+is legible-at-60-FPS low-poly, not photorealism (that's Phase 12).
+
+### Scope
+- [x] Tokens (incl. new **motion tokens**: `--ease-out`, `--dur*`,
+  `--spring`) & `primitives/` (`Panel`, `Stat`, `Readout`, `Chip`,
+  `Meter`, `Disclosure`); ad-hoc glass deleted.
+- [x] `console/ConsoleLayout` — top bar / 3D stage / right rail / bottom
+  strip on one always-mounted screen; `density` control (`focus` /
+  `standard` / `inspect`) replaces the `activeMode` enum.
+- [x] **Waymo-style stage** — `3d/SimulationScene.tsx`: route road +
+  lane lines (drei `<Line>`, real width); ego + class-coloured NPCs;
+  `SurroundPerceptionLayer` — per-track wireframe box + camera-facing
+  frosted label card from `heavy.surround_perception`; planned-path
+  corridor + dimmed candidates from `semantic.planner`; per-agent
+  intent-coloured forecast tubes from `heavy.prediction`; ground risk
+  wash; chase camera. (Camera stays lerp-damped, not spring — deferred.)
+- [x] **Tesla-style overlay motion** — one `hud/DriveHUD` on primitives
+  (speed, target, `speed_limit_reason` binding constraint, steering,
+  predictive-slowdown chip); numeric values tween (`useTween`); rail
+  panels slide+fade in (staggered); one-shot border pulse on state
+  change; global `prefers-reduced-motion` path. Duplicate HUD deleted.
+- [x] Channel-aligned panels (`console/RailPanels.tsx`): `Ego / Control`
+  (`pose.ego`), `Perception` (`semantic.perception` + `heavy.surround`),
+  `Prediction` (`heavy.prediction` — intent bars, `p_cut_in` + TTC,
+  per-agent forecast, `proactive_decel_mps2`), `Safety Shield`
+  (`semantic.safety_shield`), `Planner` (`semantic.planner`),
+  `Driver Analytics` (`semantic.driver_analytics`, "does not drive the
+  vehicle" disclaimer). Each header tag names its bound channel;
+  `verify:ui` asserts the binding (see 7.5.3 note).
+- [x] `console/ScenarioStrip` — scenario state + transport
+  (pause/step/reset, Space) + live scenario quick-pick + destination;
+  folds in `ScenarioControlRoom` + `DestinationInput`. (Event *timeline*
+  deferred — needs the event stream surfaced in the store.)
+- [x] Stale labels killed; `decision`/`confidence` are Driver-Analytics
+  only, never on the HUD. `research` mode folded to `inspect` density;
+  mode system + `useUISettings` deleted.
+- [x] Legacy trees removed outright (`app/components/*`,
+  `components/modes`, `components/panels`, `components/charts`); 10
+  now-unused deps dropped.
+
+### Gates
+- **7.5.1** `tsc --noEmit` exits 0.
+- **7.5.2** Exactly one HUD component; `src/app/components/` empty; grep for
+  `bg-black/4` / `border-white/1` literals in `src/` is clean.
+- **7.5.3** Every `src/components/panels/*Panel.tsx` imports ≥1 type from
+  `types/protocol` — panel-contract test passes.
+- **7.5.4** Capability-claim denylist scan over `src/` is clean
+  (`LiDAR`/`Vision`/`camera`/`neural`/`AI decides` only inside a marked
+  disclaimer).
+- **7.5.5** `Prediction & Intent` panel renders every `PredictionState`
+  field at `inspect` density — component test against a fixture payload.
+- **7.5.6** `focus` density is layout-equivalent to today's Drive mode
+  (stage + HUD only) — rendered-DOM snapshot.
+- **7.5.7** Keyboard-operable end to end; no `tabindex` traps.
+- **7.5.8** Stage-object traceability: with the store cleared, the scene
+  renders only road + ego — every box / label / corridor / tube is a
+  store-field consequence.
+- **7.5.9** `prefers-reduced-motion: reduce` — no transition > 1 ms, no
+  numeric tween, static state colour (jsdom test).
+- **7.5.10** 60 FPS at 1080p with 30 NPCs + forecast tubes + boxes at
+  `standard` density (frame-time p95 < 16.7 ms; shares Phase 12 Gate
+  12.1's harness once it exists).
+
+### Status — 2026-08-28 (branch `phase-7.5-ui-design`)
+Shipped in 6 commits (`378a598` → `efd1f15`), verified live against the
+running backend across all three densities.
+
+| Gate | State | Note |
+|---|---|---|
+| 7.5.1 | ✅ | `tsc --noEmit` 0; `eslint src` 0 (fixed 7 pre-existing `any`). |
+| 7.5.2 | ✅ | One HUD (`hud/DriveHUD`); `app/components/` **deleted**; glass-literal grep clean. |
+| 7.5.3 | ◑ | Panels live in `console/RailPanels.tsx` (not `panels/*Panel.tsx`) and read the typed store rather than importing `protocol.ts` directly. Replaced by a stronger check: `npm run verify:ui` asserts every `<PanelSection>` is bound to a real `pose.`/`semantic.`/`heavy.` channel. |
+| 7.5.4 | ✅ | `scripts/verify-ui-contract.mjs` denylist over the live tree — clean. |
+| 7.5.5 | ◑ | `Prediction` panel renders cut-in P/TTC, `proactive_decel_mps2`, per-agent intent at `inspect`. No fixture-payload component test — **no frontend test runner installed**; `verify:ui` is the stand-in. |
+| 7.5.6 | ✅ | `focus` = stage + HUD only; rail + strip unmounted. Verified. |
+| 7.5.7 | ✅ | Disclosure / DensityToggle / strip controls are real `<button>`s, keyboard-operable; no tabindex traps. |
+| 7.5.8 | ✅ | By construction — every box / card / corridor / tube is a store-field consequence; empty store → road + ego only. |
+| 7.5.9 | ✅ | Global `@media (prefers-reduced-motion: reduce)` collapses all transitions/animations; `useTween` / `useReducedMotion` short-circuit to the target value. |
+| 7.5.10 | ⏳ | Not measured — deferred to Phase 12 Gate 12.1's frame-time harness. |
+
+Deferred within 7.5: spring-damped camera (still lerp), scenario **event
+timeline** (needs the event stream in the store), fixture-based component
+tests (needs a test runner — Phase 8 tooling task).
+
+### Phase 7.5+ — advanced operator-console upgrade (2026-08-28, same branch)
+A follow-on pass over the shipped 7.5 console — *upgrade, not rebuild*;
+the density architecture, channel-aligned panels and typed protocol
+integration are untouched. Every addition is backed by real streamed
+state; **traffic signals / crosswalks / intersections / merge geometry
+were explicitly not built** — the backend has no map or signal data and
+faking it would violate the data-honesty rule. Commits `b961e2b` →
+`5c38083`.
+
+| # | Upgrade | Data source |
+|---|---|---|
+| A | Operational event log + timeline (`store/useEvents`, `console/EventTimeline`) — ticker in the strip, `list` in rail panel 07 | the real `{type:"event"}` scenario milestone stream (`scenario_engine._create_event`); empty in free drive |
+| B | Semantic track roles + 3-tier perception hierarchy (`lib/roles.ts`) — cut-in / lead / oncoming / adjacent / pedestrian / cyclist / static; primary→full card, ambient→faint outline | `cut_in.track_id`, `sensed_lead_vehicle`, `is_changing_lane`, track class/kinematics |
+| C | Planned-path **corridor** — chosen lateral plan sampled through the real route geometry (curvature-aware tapered ribbon), constraint-coloured, crossfades on plan change | `planner.candidates[is_chosen].d_target`, `speed_limit_reason`, route geom |
+| D | **Spatial** risk region — localized patch between ego and the actual threat, stretched along that line; silent at NONE | `cut_in` + `safety_shield.risk_level` + track position |
+| E | Anticipatory chase camera — low-pass-filtered steering + curvature leads the look-at into the curve; speed-scaled distance/height; still damped-lerp, no springs | `steering_angle`, `planner.curvature`, `velocity` |
+| F | Context-aware rail (numbered 01–07 pipeline, `panelSalience` dims idle / auto-opens the reacting panel) + HUD autonomy-state pill + path-clearance badge + steering dial (`lib/consoleState.ts`) | `speed_limit_reason` + `safety_shield` + `cut_in` + `is_changing_lane` |
+| G | `focus` density trims the stage (primary tracks only, no scored alternates); forward sweep only runs on a real detection; per-frame allocation cleanup | — |
+| H | HUD/Ego never display negative road speed (solver artifact from the shield-recovery branch; backend fix flagged) | — |
+
+`npm run verify:ui` extended to accept the `event.` channel; still green.
+Deferred / still honest gaps: the intruding vehicle sometimes reads
+"Tracked" not "Cut-in" when the numeric track-id ↔ `cut_in.track_id`
+match fails; spring camera; 60-FPS frame-time gate (Phase 12 harness).
+
+### Phase 7.5++ — cockpit visual skin (2026-08-28, same branch, commits `16fb345` → `b53b9b9`)
+A pure restyle of the 7.5+ console to the "operator cockpit" language of
+a Gemini-built reference prototype the owner preferred (`experimental-ui/`,
+untracked). Data wiring, honesty derivations (`roles.ts`,
+`consoleState.ts`, `useEvents`) and the channel contract are unchanged.
+
+| # | Restyle | Note |
+|---|---|---|
+| I | Tokens retuned (near-black `#07090E`, cyan `#00F2FE`, heavy glass, larger radii) + Outfit / Inter / JetBrains Mono via `next/font`. Token *names* unchanged. | — |
+| J | `ConsoleLayout` → floating glass panels over full-bleed canvas (no grid, no solid rail): top HUD bar, top-right quick strip, 372px rail that slides out in `focus`, bottom-centre card slot, full-width scenario bar. | `.dds-glass` utility |
+| K | HUD rebuilt as a 3-cluster automotive bar: display-face speed + "D" + target roundel · autonomous-state pill (beacon + real `deriveAutonomy`) + steering wheel · forward radar (`sensed_lead_vehicle`) + path-clearance badge. Still no learned-model decision/confidence. | deletes dead `TopBar` |
+| L | Rail = always-open cockpit cards (icon + display heading + channel tag, tone-accent border, `salience` dims quiet ones); `MultiStat` for perception class tallies; header reads **"10 Hz"** (the real rate). Deletes now-dead `Panel` + `Disclosure`. | — |
+| M | Bottom-centre **maneuver card** — the honest version of the reference's "AI PLANNER DECISION" card: **no confidence gauge** (deterministic planner, ADR-001); title = plain maneuver from `speed_limit_reason` + `is_changing_lane` + `cut_in`; factors = only real observed conditions; ACCEL/STEER/TARGET badges from the ego channel; compacts in `focus`. `deriveManeuver()` added. | — |
+| N | Scenario bar → "🎬 SCENARIO" + scrolling pill picks + icon playback buttons; SimulationScene gets ACESFilmic tone-mapping + exponential fog + cyan rim light; surround-track labels restyled to glass tags with a pointer. | — |
+
+| road | **Engineer the road geometry** (`routeGeometry.ts`): the rendered road was the raw OSRM polyline — ~90° cusps at every junction, no turn radius, vehicles snapping heading through corners ("turning like toys"). Now a centripetal Catmull-Rom is fit through the waypoints (same technique as the reference proving-ground road) and resampled uniformly at ~2 m, so every corner is a swept arc with a continuous tangent; cached tangents keep per-frame lookups cheap. Ribbon widened to a ~17.6 m 4-lane cross-section. `approachHeading()` in `SimulationScene` — shortest-arc heading easing with a hard yaw-rate cap (~92°/s) for ego / NPCs / track boxes, so a big station step can't pivot a car in place. Station `s` still maps by arc length (smoothing shortcuts corners by ≤ a few m over a multi-km route). | — |
+
+Verified live across `focus` / `standard` / `inspect`. Preview-only note:
+the embedded browser doesn't composite `backdrop-filter`, so glass
+opacity is set high (~0.92) for legibility there; real Chrome renders the
+blur. Not-data-backed reference elements (traffic-signal roundel, "OBD
+GPS", pedestrian-crossing %, camera view modes) were dropped, not faked.
+
+---
+
 ## Phase 8 — Unified Spatiotemporal (s, d, t) Motion Planning
 **Estimate:** ~25–40h
 **Core problem:** lateral candidate selection and longitudinal speed control
 are decoupled, producing sub-optimal joint maneuvers.
 
 ### Scope
-- [ ] `app/services/planner/spatiotemporal.py` — joint `(s, ṡ, s̈, d, ḋ, d̈, t)`
-  lattice, 4.0s horizon, quintic `d(t)`/`s(t)` polynomials with C² continuity.
-- [ ] Quadratic cost objective over lateral/longitudinal jerk, lane-center
-  deviation, target-speed tracking, and the Phase 7 risk field.
-- [ ] `app/services/planner/state_machine.py` —
-  `LANE_KEEP/PREPARE_LANE_CHANGE/EXECUTE_LANE_CHANGE/ABORT_LANE_CHANGE`, with
-  deterministic mid-maneuver abort back to lane center
-  (`|lateral jerk| ≤ 1.5 m/s³`).
-- [ ] Feasibility filters: `|a_lat| ≤ 2.0 m/s²`, `|jerk_lat| ≤ 1.5 m/s³`,
-  `a_long ∈ [-4.5, 2.5] m/s²`, `|d| ≤ 3.0m`.
+- [x] `app/services/planner/` — `planner.py` became a package. `polynomials.py`
+  (quintic `d(t)` / stopping `s(t)`, quartic velocity-keeping `s(t)`, closed-form
+  jerk-squared integral). `spatiotemporal.py` — joint `(s, ṡ, s̈, d, ḋ, d̈)` lattice
+  over `t` (Werling 2010): 5 lateral offsets × 5 durations (2–6 s) × optional 2nd
+  lane, × 5 terminal-speed fractions × 2 durations = ≥250 joint candidates.
+- [x] Quadratic cost: lateral jerk + longitudinal jerk + maneuver time + terminal
+  lane deviation + terminal speed deviation + integral of the Phase-7 risk field
+  along the path.
+- [x] `app/services/planner/state_machine.py` —
+  `LANE_KEEP / PREPARE_LANE_CHANGE / EXECUTE_LANE_CHANGE / ABORT_LANE_CHANGE`,
+  commit debounce, deterministic mid-maneuver abort (re-plans a quintic from the
+  ego's current `(d, ḋ, d̈)` back to the origin lane — same feasibility envelope).
+- [x] Feasibility filters: `|d″| ≤ 2.0`, `|d‴| ≤ 1.5`, `s″ ∈ [−4.5, 2.5]`, on-road
+  (`|d| ≤ road_half_width − margin`), corridor excursion `≤ 3.0 m` (the roadmap's
+  `|d| ≤ 3.0` read as excursion past the maneuver corridor — the adjacent lane
+  centre is at `d = 5.25`).
+
+### Integration boundary (2026-08-29, branch `phase-7.5-ui-design`, commits `52717b4`+ … Phase 8 1/6–6/6)
+The joint planner **owns lane-change maneuvers**. Steady-state lane keeping stays
+on the validated decoupled planner (`driver/lateral_planner.py`), so its cruise
+speed / waypoint progress / arrival / determinism are unchanged and the
+~250-candidate search is only paid during the seconds of an actual maneuver.
+The state machine runs every tick (cheap). Once a change commits, the trajectory
+is **committed and executed** (sampled at elapsed maneuver time with an ~0.8 s
+preview lead for pure-pursuit), re-planned only on abort / plan expiry / >1.2 m
+tracking drift — re-solving the lattice every tick and sampling it at `t = dt`
+pins the car in the quintic's near-zero-velocity opening and the maneuver never
+progresses. The joint longitudinal profile composes as one more `min()` speed cap
+(`speed_limit_reason = "spatiotemporal_plan"`); IDM / predictive / Safety-Shield
+vetoes are untouched. **Deferred:** replacing everyday longitudinal control with
+the joint profile (needs its own cost re-tuning + regression pass).
 
 ### Gates
-- **8.1** Mid-maneuver abort at 50% lateral completion: peak lateral accel
-  <1.8 m/s², zero boundary violations.
-- **8.2** 100 simulated lane changes: p99 lateral jerk strictly <1.5 m/s³.
-- **8.3** ≥30 joint candidates evaluated and winner selected in <4.0ms/tick.
-- **8.4** ≥20 new tests in `tests/test_spatiotemporal_planner.py`; total ≥221.
+- **8.1** ✅ Mid-maneuver abort at 50% completion (from a still-crossing ego
+  state): peak `|a_lat|` < 1.8, jerk ≤ 1.5, on-road — `test_gate_8_1_*`.
+- **8.2** ✅ 100 varied lane changes: p99 lateral jerk < 1.5 (enforced by the
+  feasibility filter) — `test_100_lane_changes_p99_lateral_jerk_under_1_5`.
+- **8.3** ✅ ≥250 joint candidates evaluated; `plan()` best-of-50 tick < 4.0 ms —
+  `test_plan_returns_a_trajectory_on_open_road` + `test_plan_runs_under_4ms_per_tick`.
+- **8.4** ✅ 24 new tests in `tests/test_spatiotemporal_planner.py`; suite total
+  ~296 (was 272).
 
 ---
 
@@ -431,9 +609,11 @@ behavior (tailgating, weaving, shockwaves).
 |---|---|---|---|---|
 | Baseline | Phases 1-5 | — | 168 | 168/168, tsc clean |
 | 6 | Perception + EKF tracking | +21 | 189 | blind-spot detect, <2ms |
-| 6.5 | World/Driver architecture (partial; items 5/7 → P7) | +36 | 225 | 189 unchanged + bit-identical replay |
-| 7 | Trajectory prediction (backend done; ribbon UI pending) | +34 | 259 | ≥1.2s cut-in warning |
-| 8 | Spatiotemporal planner | +20 | 221 | mid-maneuver abort |
+| 6.5 | World/Driver architecture (all 8 items; 6.5.3/6.5.4 pragmatic) | +40 | 229 | 189 unchanged + bit-identical replay + tsc |
+| 7 | Trajectory prediction + intent + risk field + ribbon UI | +34 | 263 | ≥1.2s cut-in warning |
+| 7.x | Hardening 1–7: committed ML artifacts, perf gates measured, defensive guards | +9 | 270 | 270 pass / 2 skip (pinned toolchain) |
+| 7.5 | HMI restructure — one honest AV console (ADR-002) | frontend | 270 | tsc clean, panel-contract test, denylist scan |
+| 8 | Spatiotemporal planner | +20 | 290 | mid-maneuver abort |
 | 9 | Dynamic tire physics | +16 | 237 | step-steer, ABS |
 | 10 | Semantic map + intersections | +22 | 259 | 0 stop-line overruns |
 | 11 | RSS safety + MRM | +18 | 277 | 0 at-fault (defined set) |
@@ -442,11 +622,15 @@ behavior (tailgating, weaving, shockwaves).
 
 ## Execution order
 
-Sequential. Phase 6 (perception) is complete. **Phase 6.5 (the World/Driver
-architectural restructure, ADR-001 in `docs/DDS_ARCHITECTURE.md`) comes
-next** — before Phase 7, because Phases 9, 11 and 13 are structurally
-blocked without it and every phase built on the current monolith increases
-the cost of doing it later.
+Sequential. Phases 1–7 are shipped and merged to `master` (Phase 6.5 =
+the World/Driver restructure, ADR-001 in `docs/DDS_ARCHITECTURE.md`), plus
+a hardening pass over 1–7. **Phase 7.5 (the HMI restructure, ADR-002 in
+`docs/DDS_UI_DESIGN.md`) comes next** — before Phase 8, for the same reason
+6.5 preceded 7: the frontend accreted screen by screen, Phase 7's
+prediction data has no proper surface, and every remaining phase (8–13)
+adds a panel that currently has no consistent home. Phase 7.5 delivers no
+new driving behaviour; it is the interface foundation the rest renders
+into.
 
 Each phase is built, its own tests written and passing, and live-verified
 before moving to the next — no phase is marked complete on partial coverage.

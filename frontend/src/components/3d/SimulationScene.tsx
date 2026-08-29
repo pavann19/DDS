@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { PerspectiveCamera, Grid, Html, Line } from '@react-three/drei';
 import { useSimulationStore } from '../../store/useSimulationStore';
+import { useConsole } from '../../store/useConsole';
 import * as THREE from 'three';
 import { CarFront } from 'lucide-react';
 import {
@@ -13,6 +14,15 @@ import {
   getWorldPosAtFrenet,
   sampleFrenetCorridor,
 } from '../../lib/routeGeometry';
+import { annotateTracks, ROLE_LABEL, type AnnotatedTrack, type TrackRole } from '../../lib/roles';
+
+// Shared GPU resources — created once, never per-frame or per-track.
+const UNIT_EDGES = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+const EMPTY_GEOM = new THREE.BufferGeometry();
+
+// Reusable scratch vectors for the camera loop (no per-frame allocation).
+const CAM_POS = new THREE.Vector3();
+const CAM_LOOK = new THREE.Vector3();
 
 // Real pixel-width lines: native THREE.Line/lineBasicMaterial's `linewidth`
 // is capped at 1px on most GPUs/browsers (a long-standing WebGL
@@ -37,7 +47,8 @@ const THEME = {
   detectedSafe: '#10B981',
   detectedWarning: '#F59E0B',
   detectedCritical: '#EF4444',
-  roadSurface: '#070A10',
+  bgApp: '#07090E',
+  roadSurface: '#0A0E16',
   laneWhite: '#E2E8F0',
   laneYellow: '#FBBF24',
   laneCyan: '#00E5FF',
@@ -65,43 +76,154 @@ function headingToForward(headingRad: number): THREE.Vector3 {
   return new THREE.Vector3(Math.sin(headingRad), 0, -Math.cos(headingRad));
 }
 
+/** Allocation-free variant for hot loops. */
+function headingToForwardInto(out: THREE.Vector3, headingRad: number): THREE.Vector3 {
+  return out.set(Math.sin(headingRad), 0, -Math.cos(headingRad));
+}
+const FWD_A = new THREE.Vector3();
+const FWD_B = new THREE.Vector3();
+
+// Real vehicles don't pivot on the spot. Ease `current` heading (rad)
+// toward `target` along the SHORTEST arc, but never faster than a real
+// car's yaw rate -- this is what stops NPCs "spinning like toys" when a
+// station step lands them a big heading delta (route recycles, residual
+// corner kinks, the +/-180 deg seam).
+const MAX_YAW_RATE = 1.6; // rad/s (~92 deg/s) — covers hard cornering, kills spins
+function approachHeading(current: number, target: number, alpha: number, dt: number): number {
+  let diff = target - current;
+  diff = ((diff + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+  const eased = diff * alpha;
+  const cap = MAX_YAW_RATE * Math.max(dt, 1 / 120);
+  return current + Math.max(-cap, Math.min(cap, eased));
+}
+
 function useRouteGeometry(): RouteGeometry | null {
   const routeWaypoints = useSimulationStore((state) => state.routeWaypoints);
   return useMemo(() => buildRouteGeometry(routeWaypoints), [routeWaypoints]);
 }
 
-// --- 1. Tesla / Waymo Planned Trajectory Ribbon (Path of Intent) ---
-function PlannedTrajectoryRibbon() {
-  const meshRef = useRef<THREE.Mesh>(null);
+// --- 1. Planned-path corridor (§6): the chosen lateral plan sampled
+// through the REAL route geometry so it follows the road's curves, built
+// as a tapered ribbon rather than a line. Colour tracks the binding
+// constraint (speed_limit_reason). When the plan changes materially the
+// previous ribbon fades out while the new one fades in -- no visual jump.
+const CORRIDOR_HORIZON_M = 46;
+const CORRIDOR_STEPS = 20;
+const CORRIDOR_HALF_W = 1.25;
+
+const CORRIDOR_COLOR: Record<string, string> = {
+  cruise: THEME.teslaBlueRibbon,
+  lateral_accel_limit: THEME.detectedWarning,
+  tracking_correction: THEME.teslaBlueRibbon,
+  car_following: THEME.detectedWarning,
+  predictive_cut_in: THEME.detectedWarning,
+  safety_shield_override: THEME.detectedCritical,
+};
+
+/** Tapered triangle-strip ribbon from a centreline. */
+function buildRibbonGeometry(points: THREE.Vector3[]): THREE.BufferGeometry {
+  const n = points.length;
+  const pos = new Float32Array(n * 2 * 3);
+  const tan = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    const p = points[i];
+    const prev = points[Math.max(0, i - 1)];
+    const next = points[Math.min(n - 1, i + 1)];
+    tan.subVectors(next, prev);
+    const nx = tan.z, nz = -tan.x;
+    const len = Math.hypot(nx, nz) || 1;
+    const w = CORRIDOR_HALF_W * (1 - 0.45 * (i / (n - 1)));
+    const ox = (nx / len) * w, oz = (nz / len) * w;
+    pos[i * 6 + 0] = p.x + ox; pos[i * 6 + 1] = p.y; pos[i * 6 + 2] = p.z + oz;
+    pos[i * 6 + 3] = p.x - ox; pos[i * 6 + 4] = p.y; pos[i * 6 + 5] = p.z - oz;
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const a = i * 2, b = i * 2 + 1, c = i * 2 + 2, d = i * 2 + 3;
+    idx.push(a, b, c, b, d, c);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  return g;
+}
+
+function PlannedCorridor() {
+  const ego = useSimulationStore((s) => s.ego);
+  const planner = useSimulationStore((s) => s.planner);
+  const routeGeom = useRouteGeometry();
+
+  const chosenD =
+    planner?.candidates.find((c) => c.is_chosen)?.d_target ??
+    planner?.lane_center ??
+    ego?.frenet?.d ??
+    0;
+  const reason = ego?.speed_limit_reason ?? 'cruise';
+  const color = CORRIDOR_COLOR[reason] ?? THEME.teslaBlueRibbon;
+
+  // Rebuild only when the plan actually moves (quantised signature).
+  const sig = ego
+    ? `${Math.round(ego.frenet.s)}:${(ego.frenet.d).toFixed(1)}:${chosenD.toFixed(1)}:${Boolean(routeGeom)}`
+    : 'none';
 
   const geometry = useMemo(() => {
-    return new THREE.PlaneGeometry(2.4, 50, 1, 16);
-  }, []);
-
-  useFrame((state) => {
-    if (meshRef.current) {
-      const forward = headingToForward(sharedVehicleState.headingRad);
-      // Keep ribbon locked directly in front of the vehicle, along its
-      // REAL heading (not always -Z -- the road curves now).
-      const aheadDist = 26;
-      meshRef.current.position.set(
-        sharedVehicleState.x + forward.x * aheadDist,
-        0.03,
-        sharedVehicleState.z + forward.z * aheadDist,
-      );
-      meshRef.current.rotation.y = -sharedVehicleState.headingRad;
-
-      const material = meshRef.current.material as THREE.MeshBasicMaterial;
-      if (material) {
-        material.opacity = 0.35 + Math.sin(state.clock.elapsedTime * 4) * 0.12;
+    if (!ego) return null;
+    let pts: THREE.Vector3[];
+    if (routeGeom) {
+      pts = sampleFrenetCorridor(routeGeom, ego.frenet.s, ego.frenet.d, chosenD, CORRIDOR_HORIZON_M, CORRIDOR_STEPS);
+    } else {
+      const f = headingToForward(sharedVehicleState.headingRad);
+      pts = [];
+      for (let i = 0; i <= CORRIDOR_STEPS; i++) {
+        const t = (i / CORRIDOR_STEPS) * CORRIDOR_HORIZON_M;
+        pts.push(new THREE.Vector3(sharedVehicleState.x + f.x * t, 0.15, sharedVehicleState.z + f.z * t));
       }
+    }
+    return buildRibbonGeometry(pts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig]);
+
+  // Crossfade handled entirely in the three layer: two persistent meshes,
+  // geometry swapped on the inactive one in an effect, opacity driven in
+  // useFrame. No React state / no ref reads during render.
+  const meshA = useRef<THREE.Mesh>(null);
+  const meshB = useRef<THREE.Mesh>(null);
+  const active = useRef(0); // which mesh currently shows the live plan
+  const fade = useRef(1);
+
+  useEffect(() => {
+    if (!geometry) return;
+    const incoming = active.current === 0 ? meshB.current : meshA.current;
+    const outgoing = active.current === 0 ? meshA.current : meshB.current;
+    if (!incoming || !outgoing) return;
+    const stale = incoming.geometry;
+    incoming.geometry = geometry;
+    if (stale && stale !== geometry && stale !== EMPTY_GEOM) stale.dispose();
+    active.current = active.current === 0 ? 1 : 0;
+    fade.current = 0;
+  }, [geometry]);
+
+  useFrame((_, delta) => {
+    fade.current = Math.min(1, fade.current + delta * 3.5);
+    const inM = (active.current === 0 ? meshA.current : meshB.current);
+    const outM = (active.current === 0 ? meshB.current : meshA.current);
+    if (inM) (inM.material as THREE.MeshBasicMaterial).opacity = 0.34 * fade.current + 0.12;
+    if (outM) {
+      (outM.material as THREE.MeshBasicMaterial).opacity = 0.34 * (1 - fade.current);
+      outM.visible = fade.current < 1;
     }
   });
 
+  if (!geometry) return null;
   return (
-    <mesh ref={meshRef} geometry={geometry} rotation={[-Math.PI / 2, 0, 0]}>
-      <meshBasicMaterial color={THEME.teslaBlueRibbon} transparent opacity={0.4} side={THREE.DoubleSide} />
-    </mesh>
+    <group>
+      <mesh ref={meshA} geometry={EMPTY_GEOM}>
+        <meshBasicMaterial color={color} transparent opacity={0} side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+      <mesh ref={meshB} geometry={EMPTY_GEOM}>
+        <meshBasicMaterial color={color} transparent opacity={0} side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+    </group>
   );
 }
 
@@ -125,6 +247,10 @@ function LidarRadarSweep() {
 
   useFrame((state) => {
     if (!ringRef.current) return;
+    // §18 — no decorative constant animation: the sweep only runs while
+    // the forward sensor actually has a detection to resolve.
+    ringRef.current.visible = !!leadDetection;
+    if (!leadDetection) return;
     ringRef.current.position.x = sharedVehicleState.x;
     ringRef.current.position.z = sharedVehicleState.z;
 
@@ -146,7 +272,7 @@ function LidarRadarSweep() {
   });
 
   return (
-    <mesh ref={ringRef} position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+    <mesh ref={ringRef} position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
       <ringGeometry args={[RADAR_BASE_RING_RADIUS, RADAR_BASE_RING_RADIUS * 1.075, 32]} />
       <meshBasicMaterial color={THEME.brandCyan} transparent opacity={0.35} side={THREE.DoubleSide} />
     </mesh>
@@ -195,14 +321,9 @@ function EgoVehicle() {
     groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, targetZ, alpha);
     groupRef.current.position.y = 0.4;
 
-    // Shortest-path heading lerp (through +/-180deg wrap), not a raw
-    // rotation.y lerp -- a naive lerp spins the long way round whenever
-    // the heading crosses the +/-180deg seam, which real routes with a
-    // U-ish turn or a heading near due-south hit constantly.
-    const currentHeading = -groupRef.current.rotation.y;
-    let diff = targetHeadingRad - currentHeading;
-    diff = ((diff + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-    const newHeading = currentHeading + diff * alpha;
+    // Shortest-arc, yaw-rate-capped heading (no long-way-round spins, no
+    // toy-like pivoting on a big station step).
+    const newHeading = approachHeading(-groupRef.current.rotation.y, targetHeadingRad, alpha, delta);
     groupRef.current.rotation.y = -newHeading;
 
     sharedVehicleState.x = groupRef.current.position.x;
@@ -257,8 +378,7 @@ function EgoVehicle() {
       </mesh>
 
       {/* Dynamic Ego Perception Box */}
-      <lineSegments position={[0, 0.55, 0]}>
-        <edgesGeometry args={[new THREE.BoxGeometry(2.15, 1.35, 4.5)]} />
+      <lineSegments geometry={UNIT_EDGES} scale={[2.15, 1.35, 4.5]} position={[0, 0.55, 0]}>
         <lineBasicMaterial color={THEME.brandCyan} />
       </lineSegments>
     </group>
@@ -281,7 +401,7 @@ function NpcVehicle({ worldPos, worldHeadingRad, isDetected, perceptionInfo }: {
   worldPos: { x: number; z: number };
   worldHeadingRad: number;
   isDetected: boolean;
-  perceptionInfo?: any;
+  perceptionInfo?: import('../../types/protocol').PerceptionObject;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const lastWorldPos = useRef<{ x: number; z: number } | null>(null);
@@ -309,7 +429,7 @@ function NpcVehicle({ worldPos, worldHeadingRad, isDetected, perceptionInfo }: {
     groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, worldPos.x, alpha);
     groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, worldPos.z, alpha);
     groupRef.current.position.y = 0.4;
-    groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, -worldHeadingRad, alpha);
+    groupRef.current.rotation.y = -approachHeading(-groupRef.current.rotation.y, worldHeadingRad, alpha, delta);
 
     if (fadeElapsed.current < NPC_FADE_IN_DURATION_S) {
       fadeElapsed.current += delta;
@@ -367,8 +487,7 @@ function NpcVehicle({ worldPos, worldHeadingRad, isDetected, perceptionInfo }: {
       </mesh>
 
       {/* Detected 3D Bounding Box */}
-      <lineSegments position={[0, 0.55, 0]}>
-        <edgesGeometry args={[new THREE.BoxGeometry(2.05, 1.3, 4.3)]} />
+      <lineSegments geometry={UNIT_EDGES} scale={[2.05, 1.3, 4.3]} position={[0, 0.55, 0]}>
         <lineBasicMaterial ref={registerMaterial} transparent color={boxColor} />
       </lineSegments>
 
@@ -441,7 +560,11 @@ function PlannerCandidatePaths() {
   const ego = useSimulationStore((state) => state.ego);
   const planner = useSimulationStore((state) => state.planner);
   const routeGeom = useRouteGeometry();
+  const density = useConsole((s) => s.density);
 
+  // §14 — focus keeps only the chosen plan; the scored alternatives are a
+  // standard / inspect detail.
+  if (density === 'focus') return null;
   if (!routeGeom || !ego || !planner || planner.candidates.length === 0) return null;
 
   const startS = ego.frenet.s;
@@ -500,59 +623,115 @@ const INTENT_COLOR: Record<string, string> = {
 
 function PredictedAgentRibbons() {
   const prediction = useSimulationStore((state) => state.prediction);
-  if (!prediction || prediction.agents.length === 0) return null;
+
+  // Build the Vector3 trails once per prediction update, not every render.
+  const lines = useMemo(() => {
+    if (!prediction || prediction.agents.length === 0) return [];
+    return prediction.agents
+      .filter((agent) => agent.trail && agent.trail.length >= 2)
+      .map((agent) => ({
+        key: agent.track_id,
+        points: agent.trail.map((p) => new THREE.Vector3(p.x, 0.16, p.z)),
+        color: INTENT_COLOR[agent.intent[0]?.label ?? 'LANE_KEEP'] ?? THEME.npcTaillight,
+        isCutIn: prediction.cut_in.active && prediction.cut_in.track_id === agent.track_id,
+      }));
+  }, [prediction]);
+
+  if (lines.length === 0) return null;
 
   return (
     <group>
-      {prediction.agents.map((agent) => {
-        if (!agent.trail || agent.trail.length < 2) return null;
-        const points = agent.trail.map((p) => new THREE.Vector3(p.x, 0.16, p.z));
-        const dominant = agent.intent[0]?.label ?? 'LANE_KEEP';
-        const color = INTENT_COLOR[dominant] ?? THEME.npcTaillight;
-        const isCutInAgent = prediction.cut_in.active && prediction.cut_in.track_id === agent.track_id;
-        return (
-          <Line
-            key={`forecast-${agent.track_id}`}
-            points={points}
-            color={color}
-            lineWidth={isCutInAgent ? 4.5 : 2.5}
-            transparent
-            opacity={isCutInAgent ? 0.95 : 0.5}
-            dashed={!isCutInAgent}
-            dashSize={0.9}
-            gapSize={0.5}
-          />
-        );
-      })}
+      {lines.map(({ key, points, color, isCutIn }) => (
+        <Line
+          key={`forecast-${key}`}
+          points={points}
+          color={color}
+          lineWidth={isCutIn ? 4.5 : 2.5}
+          transparent
+          opacity={isCutIn ? 0.95 : 0.5}
+          dashed={!isCutIn}
+          dashSize={0.9}
+          gapSize={0.5}
+        />
+      ))}
     </group>
   );
 }
 
-// --- 4c-ii. Predictive risk tint: a soft amber ground halo under the ego
-// while the prediction stage is running its comfort-bounded proactive
-// slowdown for a developing cut-in (speed_limit_reason "predictive_cut_in").
-// Distinct from ShieldOverrideIndicator's red emergency halo -- this fires
-// EARLIER and is not an override. ---
-function PredictiveRiskTint() {
-  const prediction = useSimulationStore((state) => state.prediction);
-  const ringRef = useRef<THREE.Mesh>(null);
-  const active = !!prediction && prediction.cut_in.active;
+// --- 4c-ii. Spatial risk region (§10): instead of washing the whole
+// ground, place a localized patch *between the ego and the actual threat*
+// and stretch it along that line. The threat is the real cut-in agent
+// (Phase 7 cut_in.track_id) or, failing that, the nearest closing track
+// while the safety shield reports MEDIUM+ risk. Intensity scales with
+// cut_in.probability / risk_level. Silent when risk is NONE. ---
+const RISK_RANK: Record<string, number> = { NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 };
+
+function SpatialRiskRegion() {
+  const prediction = useSimulationStore((s) => s.prediction);
+  const shield = useSimulationStore((s) => s.safetyShield);
+  const tracks = useSimulationStore((s) => s.surroundPerception);
+
+  const patchRef = useRef<THREE.Mesh>(null);
+
+  // Resolve the threat position (local x/z) + a 0..1 severity.
+  const threat = useMemo(() => {
+    const cutInId = prediction?.cut_in.active ? prediction.cut_in.track_id : null;
+    const risk = shield?.risk_level ?? 'NONE';
+    const riskRank = RISK_RANK[risk] ?? 0;
+
+    let pos: { x: number; z: number } | null = null;
+    let severity = 0;
+
+    if (cutInId != null) {
+      const t = tracks.find((tr) => tr.id.match(/(\d+)/)?.[1] === String(cutInId));
+      if (t) {
+        pos = { x: t.x, z: t.z };
+        severity = Math.max(0.4, prediction?.cut_in.probability ?? 0.5);
+      }
+    }
+    if (!pos && riskRank >= 2 && tracks.length) {
+      // nearest track ahead-ish as the shield's implied threat
+      let best = Infinity;
+      for (const t of tracks) {
+        if (Math.abs(((t.azimuth_deg + 180) % 360) - 180) > 60) continue;
+        if (t.range_m < best) {
+          best = t.range_m;
+          pos = { x: t.x, z: t.z };
+        }
+      }
+      severity = riskRank / 4;
+    }
+    return pos ? { pos, severity } : null;
+  }, [prediction, shield, tracks]);
 
   useFrame((state) => {
-    if (!ringRef.current) return;
-    ringRef.current.visible = active;
-    if (!active) return;
-    ringRef.current.position.x = sharedVehicleState.x;
-    ringRef.current.position.z = sharedVehicleState.z;
-    const pulse = (Math.sin(state.clock.elapsedTime * 5) + 1) / 2;
-    const p = prediction?.cut_in.probability ?? 0;
-    (ringRef.current.material as THREE.MeshBasicMaterial).opacity = 0.14 + pulse * 0.12 + p * 0.14;
+    const m = patchRef.current;
+    if (!m) return;
+    if (!threat) {
+      m.visible = false;
+      return;
+    }
+    m.visible = true;
+    const ex = sharedVehicleState.x;
+    const ez = sharedVehicleState.z;
+    const dx = threat.pos.x - ex;
+    const dz = threat.pos.z - ez;
+    const dist = Math.hypot(dx, dz) || 1;
+    // patch centred ~60% of the way to the threat, aligned along the line
+    m.position.set(ex + dx * 0.6, 0.03, ez + dz * 0.6);
+    m.rotation.set(-Math.PI / 2, 0, -Math.atan2(dx, dz));
+    const pulse = (Math.sin(state.clock.elapsedTime * 4) + 1) / 2;
+    const s = threat.severity;
+    m.scale.set(3 + s * 3, Math.min(dist * 0.7, 6 + s * 10), 1);
+    const mat = m.material as THREE.MeshBasicMaterial;
+    mat.color.set(s > 0.75 ? THEME.detectedCritical : THEME.detectedWarning);
+    mat.opacity = 0.1 + s * 0.16 + pulse * 0.06 * s;
   });
 
   return (
-    <mesh ref={ringRef} position={[0, 0.025, 0]} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
-      <ringGeometry args={[3.4, 9.0, 48]} />
-      <meshBasicMaterial color={THEME.detectedWarning} transparent opacity={0.2} side={THREE.DoubleSide} />
+    <mesh ref={patchRef} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
+      <circleGeometry args={[1, 32]} />
+      <meshBasicMaterial color={THEME.detectedWarning} transparent opacity={0} side={THREE.DoubleSide} depthWrite={false} />
     </mesh>
   );
 }
@@ -606,31 +785,11 @@ function HighwayRoad() {
         <mesh geometry={ribbon.roadGeometry}>
           <meshStandardMaterial color={THEME.roadSurface} roughness={0.95} />
         </mesh>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(
-            ribbon.centerLine.flatMap((p) => [
-              p.clone().add(new THREE.Vector3(0.15, 0, 0)),
-              p.clone().add(new THREE.Vector3(-0.15, 0, 0)),
-            ]),
-          ) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneYellow} linewidth={2} />
-        </line>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(ribbon.leftBound) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneCyan} linewidth={2} />
-        </line>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(ribbon.rightBound) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneCyan} linewidth={2} />
-        </line>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(ribbon.leftLane) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneWhite} transparent opacity={0.7} />
-        </line>
-        <line>
-          <bufferGeometry attach="geometry" {...(new THREE.BufferGeometry().setFromPoints(ribbon.rightLane) as any)} />
-          <lineBasicMaterial attach="material" color={THEME.laneWhite} transparent opacity={0.7} />
-        </line>
+        <Line points={ribbon.centerLine} color={THEME.laneYellow} lineWidth={2} dashed dashSize={2} gapSize={2} />
+        <Line points={ribbon.leftBound} color={THEME.laneCyan} lineWidth={2} />
+        <Line points={ribbon.rightBound} color={THEME.laneCyan} lineWidth={2} />
+        <Line points={ribbon.leftLane} color={THEME.laneWhite} lineWidth={1} transparent opacity={0.6} dashed dashSize={1.5} gapSize={1.5} />
+        <Line points={ribbon.rightLane} color={THEME.laneWhite} lineWidth={1} transparent opacity={0.6} dashed dashSize={1.5} gapSize={1.5} />
       </group>
     );
   }
@@ -647,45 +806,187 @@ function HighwayRoad() {
   );
 }
 
-// --- 6. Smooth Tesla-Style Chase Camera ---
-function SynchronizedChaseCamera() {
-  const cameraInitialized = useRef(false);
+// --- 5b. Surround perception tracks (heavy.surround_perception): the
+// ego's own 360-degree sensor-resolved picture -- confirmed tracks only.
+// Each track carries a *semantic role* (lib/roles.ts) derived from real
+// state (the sensor's own lead call, the Phase 7 cut_in.track_id, the
+// track's own class/kinematics) and a *relevance tier* that drives a
+// three-level visual hierarchy: primary tracks get a solid box + full
+// role card + ground ring; ambient tracks are a faint wire outline only.
+// Same honesty boundary as the rest of the scene -- no map, no crosswalks,
+// no signals; a track that matches no rule is just "tracked". ---
+const ROLE_COLOR: Record<TrackRole, string> = {
+  'cut-in': THEME.detectedCritical,
+  lead: THEME.brandCyan,
+  oncoming: '#A78BFA',
+  adjacent: THEME.detectedWarning,
+  pedestrian: THEME.detectedWarning,
+  cyclist: THEME.detectedWarning,
+  static: '#64748B',
+  tracked: '#64748B',
+};
+
+function SurroundTrackBox({ a }: { a: AnnotatedTrack }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const { track, role, relevance, closingMps, speedMps } = a;
+  const [len, wid, hei] = track.dims;
+  const color = ROLE_COLOR[role];
+  const heading = Math.atan2(track.vx, -track.vz);
+
+  const boxOpacity = relevance === 'primary' ? 0.92 : relevance === 'secondary' ? 0.5 : 0.2;
+
+  useFrame((_, delta) => {
+    if (!groupRef.current) return;
+    const k = Math.min(1, delta * 12);
+    groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, track.x, k);
+    groupRef.current.position.z = THREE.MathUtils.lerp(groupRef.current.position.z, track.z, k);
+    groupRef.current.rotation.y = -approachHeading(-groupRef.current.rotation.y, heading, k, delta);
+  });
+
+  return (
+    <group ref={groupRef} position={[track.x, 0.02, track.z]}>
+      <lineSegments geometry={UNIT_EDGES} scale={[wid, hei, len]} position={[0, hei / 2, 0]}>
+        <lineBasicMaterial color={color} transparent opacity={boxOpacity} />
+      </lineSegments>
+
+      {relevance === 'primary' && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+          <ringGeometry args={[Math.max(wid, len) * 0.62, Math.max(wid, len) * 0.7, 24]} />
+          <meshBasicMaterial color={color} transparent opacity={0.4} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+
+      {relevance !== 'ambient' && (
+        <Html position={[0, hei + 0.5, 0]} center distanceFactor={relevance === 'primary' ? 22 : 16} zIndexRange={[90, 0]}>
+          <div
+            className="pointer-events-none select-none"
+            style={{
+              position: 'relative',
+              transform: 'translateY(-100%)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+              padding: '4px 8px',
+              fontFamily: 'var(--font-mono)',
+              whiteSpace: 'nowrap',
+              background: 'rgba(10, 15, 24, 0.85)',
+              backdropFilter: 'blur(12px) saturate(160%)',
+              border: `1px solid ${color}`,
+              borderRadius: 6,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color }}>{ROLE_LABEL[role]}</span>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-bright)' }}>{track.range_m.toFixed(0)} m</span>
+            </div>
+            {relevance === 'primary' && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 9, color: 'var(--text-muted)' }}>
+                <span>{(speedMps * 3.6).toFixed(0)} km/h</span>
+                {Number.isFinite(closingMps) && (
+                  <span>{closingMps > 0 ? '▼' : '▲'} {Math.abs(closingMps).toFixed(1)} m/s</span>
+                )}
+              </div>
+            )}
+            <span
+              aria-hidden
+              style={{
+                position: 'absolute',
+                bottom: -5,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: 0,
+                height: 0,
+                borderLeft: '5px solid transparent',
+                borderRight: '5px solid transparent',
+                borderTop: '5px solid rgba(10, 15, 24, 0.85)',
+              }}
+            />
+          </div>
+        </Html>
+      )}
+    </group>
+  );
+}
+
+function SurroundPerceptionLayer() {
+  const tracks = useSimulationStore((state) => state.surroundPerception);
+  const prediction = useSimulationStore((state) => state.prediction);
+  const perception = useSimulationStore((state) => state.perception);
+  const planner = useSimulationStore((state) => state.planner);
+  const ego = useSimulationStore((state) => state.ego);
+  const density = useConsole((s) => s.density);
+
+  const annotated = useMemo(() => {
+    if (!tracks || tracks.length === 0) return [];
+    const all = annotateTracks(tracks, {
+      egoHeadingRad: sharedVehicleState.headingRad,
+      prediction,
+      perception,
+      egoLateralM: ego?.frenet?.d ?? 0,
+      laneChanging: Boolean(planner?.is_changing_lane),
+    });
+    // §14 — focus shows only what matters to the vehicle right now.
+    return density === 'focus' ? all.filter((a) => a.relevance === 'primary') : all;
+  }, [tracks, prediction, perception, planner, ego, density]);
+
+  if (annotated.length === 0) return null;
+  return (
+    <group>
+      {annotated.map((a) => (
+        <SurroundTrackBox key={a.track.id} a={a} />
+      ))}
+    </group>
+  );
+}
+
+// --- 6. Anticipatory chase camera (§4): keeps the existing damped-lerp
+// architecture (no spring dynamics) but looks *into* the upcoming curve
+// rather than trailing the vehicle's past heading. The anticipation angle
+// is a low-pass-filtered blend of the ego's real steering angle and the
+// route's curvature ahead; follow distance and height ease up gently with
+// speed. Horizon stays fixed. ---
+function ChaseCamera() {
+  const steering = useSimulationStore((s) => s.ego?.steering_angle ?? 0);
+  const curvature = useSimulationStore((s) => s.planner?.curvature ?? 0);
+  const speedMps = useSimulationStore((s) => s.ego?.velocity ?? 0);
+
+  const initialized = useRef(false);
+  const anticip = useRef(0); // filtered anticipation yaw (rad)
 
   useFrame((state, delta) => {
     if (!sharedVehicleState.initialized) return;
 
-    const forward = headingToForward(sharedVehicleState.headingRad);
+    // Anticipation: steering dominates in tight manoeuvres, curvature adds
+    // the road's own bend. Signs chosen so the camera leads into the turn.
+    const target = THREE.MathUtils.clamp(steering * 1.6 + Math.sign(steering || 1) * curvature * 14, -0.5, 0.5);
+    anticip.current = THREE.MathUtils.lerp(anticip.current, target, Math.min(1, delta * 2.2));
+
+    const camHeadingR = sharedVehicleState.headingRad - anticip.current * 0.6;
+    const lookHeadingR = sharedVehicleState.headingRad - anticip.current;
+    const back = headingToForwardInto(FWD_A, camHeadingR);
+    const fwd = headingToForwardInto(FWD_B, lookHeadingR);
+
     const vX = sharedVehicleState.x;
     const vZ = sharedVehicleState.z;
 
-    // Chase from behind along the vehicle's REAL forward direction (not a
-    // fixed world-Z offset, which only looked right when every route
-    // rendered as a straight corridor along Z).
-    const camDist = 13.5;
-    const camHeight = 5.6;
-    const lookAheadDist = 18.0;
+    const spd = THREE.MathUtils.clamp(speedMps, 0, 25);
+    const camDist = 12 + spd * 0.28;          // 12 → ~19 m
+    const camHeight = 5.0 + spd * 0.05;        // 5.0 → ~6.25 m
+    const lookAhead = 16 + spd * 0.5 + Math.abs(anticip.current) * 22;
 
-    const targetCamPos = new THREE.Vector3(
-      vX - forward.x * camDist,
-      camHeight,
-      vZ - forward.z * camDist,
-    );
-    const targetLookAt = new THREE.Vector3(
-      vX + forward.x * lookAheadDist,
-      0.9,
-      vZ + forward.z * lookAheadDist,
-    );
+    CAM_POS.set(vX - back.x * camDist, camHeight, vZ - back.z * camDist);
+    CAM_LOOK.set(vX + fwd.x * lookAhead, 1.0, vZ + fwd.z * lookAhead);
 
-    if (!cameraInitialized.current) {
-      state.camera.position.copy(targetCamPos);
-      state.camera.lookAt(targetLookAt);
-      cameraInitialized.current = true;
+    if (!initialized.current) {
+      state.camera.position.copy(CAM_POS);
+      state.camera.lookAt(CAM_LOOK);
+      initialized.current = true;
       return;
     }
 
-    const alpha = Math.min(1, delta * 6);
-    state.camera.position.lerp(targetCamPos, alpha);
-    state.camera.lookAt(targetLookAt);
+    state.camera.position.lerp(CAM_POS, Math.min(1, delta * 3.2));
+    state.camera.lookAt(CAM_LOOK);
   });
 
   return null;
@@ -696,16 +997,20 @@ export function SimulationScene() {
     <div className="absolute inset-0 w-full h-full z-0 overflow-hidden">
       <Canvas
         gl={{ antialias: true, alpha: false }}
-        onCreated={({ gl }) => {
-          gl.setClearColor(THEME.roadSurface);
+        onCreated={({ gl, scene }) => {
+          gl.setClearColor(THEME.bgApp);
+          gl.toneMapping = THREE.ACESFilmicToneMapping;
+          gl.toneMappingExposure = 1.15;
+          scene.fog = new THREE.FogExp2(THEME.bgApp, 0.0055);
         }}
       >
-        <PerspectiveCamera makeDefault position={[0, 5.6, 13.5]} fov={45} near={0.1} far={800} />
+        <PerspectiveCamera makeDefault position={[0, 5.6, 13.5]} fov={48} near={0.1} far={800} />
 
-        {/* Ambient & Studio Lights */}
-        <ambientLight intensity={0.65} />
-        <directionalLight position={[20, 35, 20]} intensity={1.1} color="#E0F2FE" />
-        <pointLight position={[0, 8, 0]} intensity={0.4} color={THEME.brandCyan} />
+        {/* Studio key + cyan rim, matched to the cockpit palette */}
+        <ambientLight intensity={0.6} />
+        <directionalLight position={[40, 70, 50]} intensity={1.2} color="#E0F2FE" />
+        <directionalLight position={[-50, 22, -50]} intensity={0.4} color={THEME.brandCyan} />
+        <pointLight position={[0, 8, 0]} intensity={0.35} color={THEME.brandCyan} />
 
         {/* Dark Grid Background */}
         <Grid
@@ -722,8 +1027,9 @@ export function SimulationScene() {
         {/* Real Route Road (or a generic fallback until one is fetched) */}
         <HighwayRoad />
 
-        {/* Trajectory Corridor (Tesla Blue Ribbon) */}
-        <PlannedTrajectoryRibbon />
+        {/* Planned-path corridor — chosen lateral plan through the real
+            road geometry, constraint-coloured, crossfaded on change. */}
+        <PlannedCorridor />
 
         {/* Waymo Radar Sweep */}
         <LidarRadarSweep />
@@ -733,13 +1039,14 @@ export function SimulationScene() {
             rider-app signature this phase is named for. */}
         <PlannerCandidatePaths />
         <PredictedAgentRibbons />
-        <PredictiveRiskTint />
+        <SurroundPerceptionLayer />
+        <SpatialRiskRegion />
         <ShieldOverrideIndicator />
 
         {/* Dynamic Vehicles */}
         <EgoVehicle />
         <TrafficManager />
-        <SynchronizedChaseCamera />
+        <ChaseCamera />
       </Canvas>
     </div>
   );

@@ -1,71 +1,175 @@
 @import "tailwindcss";
 
 :root {
-  /* DDS 2.0 Color Palette */
-  --bg-app: #0A0D12;
-  --bg-panel: #12161E;
-  --bg-surface: #1A1F2B;
-  
-  --border-subtle: #1A1F2B;
-  --border-default: #2A303C;
-  --border-focus: #3A4250;
-  
-  --text-muted: #94a3b8;
-  --text-primary: #CBD5E1;
+  /* ============================================================
+     DDS console tokens — the ONLY colour / spacing / motion source
+     (ADR-002). Retuned to the "operator cockpit" visual language:
+     near-black ground, heavy glassmorphism, one electric-cyan accent,
+     Outfit display type. Components read these via var(); no literals.
+     ============================================================ */
+
+  /* --- surfaces --- */
+  --bg-app: #07090E;
+  --bg-panel: #0D1118;
+  --bg-surface: rgba(20, 26, 38, 0.82);
+  --bg-card: rgba(15, 20, 30, 0.92);
+  --bg-frost: rgba(9, 12, 19, 0.92);   /* HUD / rail glass over the 3D stage */
+  --bg-inset: rgba(255, 255, 255, 0.04);
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --border-focus: rgba(0, 242, 254, 0.5);
+
+  /* --- ink --- */
+  --text-faint: #64748B;
+  --text-muted: #94A3B8;
+  --text-primary: #E2E8F0;
   --text-bright: #F8FAFC;
-  
-  /* Semantic Tokens */
-  --brand: #00E5FF;
-  --brand-muted: rgba(0, 229, 255, 0.2);
-  
-  --success: #00FF88;
-  --success-muted: rgba(0, 255, 136, 0.2);
-  
-  --warning: #FFAB00;
-  --warning-muted: rgba(255, 171, 0, 0.2);
-  
-  --critical: #FF3D00;
-  --critical-muted: rgba(255, 61, 0, 0.2);
+
+  /* --- accent (one) --- */
+  --brand: #00F2FE;
+  --brand-muted: rgba(0, 242, 254, 0.12);
+  --brand-dim: rgba(0, 242, 254, 0.35);
+  --brand-ink: #04222A;               /* text on a brand fill */
+
+  /* --- semantic state (separate from the accent) --- */
+  --success: #10B981;
+  --success-muted: rgba(16, 185, 129, 0.15);
+  --warning: #F59E0B;
+  --warning-muted: rgba(245, 158, 11, 0.16);
+  --critical: #EF4444;
+  --critical-muted: rgba(239, 68, 68, 0.18);
+
+  /* --- spacing scale (4px base) --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+
+  /* --- radius --- */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* --- glass + elevation --- */
+  --glass-blur: blur(20px) saturate(180%);
+  --glass-blur-sm: blur(12px) saturate(160%);
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --elev-2: 0 8px 24px -8px rgba(0, 0, 0, 0.55);
+  --elev-frost: 0 10px 30px -5px rgba(0, 0, 0, 0.6), 0 0 20px rgba(0, 242, 254, 0.05);
+  --elev-card: 0 20px 40px -10px rgba(0, 0, 0, 0.7);
+  --glow-brand: 0 0 24px rgba(0, 242, 254, 0.22);
+  --glow-warning: 0 0 24px rgba(245, 158, 11, 0.25);
+  --glow-critical: 0 0 24px rgba(239, 68, 68, 0.32);
+
+  /* --- motion (things ease, they don't snap) --- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 140ms;
+  --dur: 240ms;
+  --dur-slow: 420ms;
+  --spring: 520ms cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* --- type (faces loaded via next/font in layout.tsx) --- */
+  --font-display: var(--font-outfit), "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-sans: var(--font-inter), "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: var(--font-jetbrains), "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
 @theme inline {
   --color-background: var(--bg-app);
   --color-foreground: var(--text-primary);
-  
   --color-brand: var(--brand);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-critical: var(--critical);
-  
-  --font-sans: "Segoe UI", Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #1a1a2e transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg-app);
+  color: var(--text-primary);
   font-family: var(--font-sans);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Smooth scrollbar for webkit browsers */
-::-webkit-scrollbar {
-  width: 4px;
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-xs); }
+
+canvas { touch-action: none; }
+
+/* The one glass surface — every floating console panel uses it. */
+.dds-glass {
+  background: var(--bg-frost);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--elev-frost);
 }
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #1a1a2e;
-  border-radius: 4px;
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dds-glass { background: #0B0F16; }
 }
 
-/* Canvas rendering hint */
-canvas {
-  touch-action: none;
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* One-shot accent pulse a panel plays when its subsystem changes state
+   (shield override, cut-in engaged). */
+@keyframes dds-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--pulse-color, var(--brand-muted)); }
+  100% { box-shadow: 0 0 0 6px transparent; }
+}
+
+/* HUD chips grow in rather than pop. */
+@keyframes dds-grow {
+  from { opacity: 0; transform: translateY(4px) scale(0.94); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Rail panels slide + fade in on mount (staggered by --i). */
+@keyframes dds-slide-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Live status beacon — a soft breathing pulse (system is active). */
+@keyframes dds-beacon {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50%      { transform: scale(1.4); opacity: 0.35; }
+}
+
+/* Hazard badge flash. */
+@keyframes dds-hazard {
+  from { opacity: 0.82; }
+  to   { opacity: 1; box-shadow: var(--glow-critical); }
+}
+
+/* Reduced-motion is a real path: every transition/animation collapses. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

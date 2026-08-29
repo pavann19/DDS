@@ -253,7 +253,7 @@ export interface SimulationEvent {
   cause: string;
   decision: string;
   confidence: number;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
 }
 
 export interface EventStreamPayload {

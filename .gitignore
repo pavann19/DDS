@@ -71,3 +71,6 @@ node_modules/
 /screenshot*.png
 /screenshot*.js
 /frontend/screenshot*.png
+
+# Standalone reference prototype (not part of the DDS app build)
+experimental-ui/

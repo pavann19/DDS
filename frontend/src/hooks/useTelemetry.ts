@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useSimulationStore } from '../store/useSimulationStore';
-import { RoutePayload, TelemetryStatePayload } from '../types/protocol';
+import { useEvents } from '../store/useEvents';
+import { EventStreamPayload, RoutePayload, TelemetryStatePayload } from '../types/protocol';
 
 export function useTelemetry(url: string) {
   const workerRef = useRef<Worker>(null);
@@ -27,10 +28,11 @@ export function useTelemetry(url: string) {
           setRoute(route.waypoints, route.steps);
           break;
         }
-        case 'EVENT':
-          // TODO: Dispatch to Event Store (Phase 5)
-          console.log('Received Event:', payload);
+        case 'EVENT': {
+          const evt = payload as EventStreamPayload;
+          if (evt?.event) useEvents.getState().pushEvent(evt.event);
           break;
+        }
       }
     };
 
