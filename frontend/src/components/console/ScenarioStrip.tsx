@@ -18,10 +18,12 @@ const FALLBACK: { id: string; name: string }[] = [
   { id: 'queue_stop_and_go', name: 'Stop & Go Queue' },
 ];
 
+// US-101 / I-280 Peninsula freeway waypoints — OSRM keeps the route on the
+// highway (long straights, gentle sweepers, no city junctions).
 const DESTINATIONS: { label: string; lat: number; lng: number }[] = [
-  { label: 'Golden Gate', lat: 37.8199, lng: -122.4783 },
-  { label: 'Ferry Bldg', lat: 37.7955, lng: -122.3937 },
-  { label: 'Twin Peaks', lat: 37.7544, lng: -122.4477 },
+  { label: '101 · Burlingame', lat: 37.585, lng: -122.352 },
+  { label: '101 · Redwood City', lat: 37.4849, lng: -122.228 },
+  { label: '280 · Daly City', lat: 37.665, lng: -122.47 },
 ];
 
 const pill: React.CSSProperties = {

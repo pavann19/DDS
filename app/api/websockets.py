@@ -94,8 +94,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
     session_id = str(uuid.uuid4())
     scorer = DriverScorer(window_size=60)
-    physics = PhysicsEngine(start_lat=37.7749, start_lng=-122.4194)
-    physics.set_destination(37.8199, -122.4783) # Default: Golden Gate Bridge
+    # Default route is a US-101 Peninsula freeway stretch (San Bruno ->
+    # Burlingame) rather than downtown city streets: OSRM keeps it on the
+    # freeway, so the driver gets long straights + gentle sweepers and no
+    # ~90 deg junctions to negotiate. City destinations are still reachable
+    # via set_destination.
+    physics = PhysicsEngine(start_lat=37.6314, start_lng=-122.4110)
+    physics.set_destination(37.5850, -122.3520)  # Default: US-101 @ Burlingame
     scenario_engine = ScenarioEngine()
     
     disconnected = False
