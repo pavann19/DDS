@@ -234,3 +234,97 @@ def test_100_lane_changes_p99_lateral_jerk_under_1_5(seed_rng=12345):
     peaks.sort()
     p99 = peaks[98]
     assert p99 < 1.5, f"p99 lateral jerk {p99:.3f} >= 1.5"
+
+
+# ===========================================================================
+# state_machine.py + the mid-maneuver abort (gate 8.1)
+# ===========================================================================
+from app.services.planner.state_machine import (
+    LaneChangeState,
+    LaneChangeStateMachine,
+    StateMachineConfig,
+)
+
+ORIGIN_D = 1.75
+ADJ_D = 5.25
+
+
+def _sm():
+    return LaneChangeStateMachine(origin_lane_d_m=ORIGIN_D, adjacent_lane_d_m=ADJ_D,
+                                  cfg=StateMachineConfig(commit_ticks=3))
+
+
+def test_state_machine_holds_lane_when_nothing_is_blocking():
+    sm = _sm()
+    for _ in range(10):
+        allowed = sm.step(current_d_m=ORIGIN_D, lane_blocked=False, adjacent_clear=True)
+    assert sm.state is LaneChangeState.LANE_KEEP
+    assert allowed == [ORIGIN_D]
+
+
+def test_state_machine_commits_a_change_only_after_the_debounce():
+    sm = _sm()  # commit_ticks = 3
+    sm.step(current_d_m=ORIGIN_D, lane_blocked=True, adjacent_clear=True)
+    assert sm.state is LaneChangeState.PREPARE_LANE_CHANGE
+    sm.step(current_d_m=ORIGIN_D, lane_blocked=True, adjacent_clear=True)
+    assert sm.state is LaneChangeState.PREPARE_LANE_CHANGE
+    allowed = sm.step(current_d_m=ORIGIN_D, lane_blocked=True, adjacent_clear=True)
+    assert sm.state is LaneChangeState.EXECUTE_LANE_CHANGE
+    assert allowed == [ADJ_D]
+
+
+def test_state_machine_aborts_prepare_if_the_gap_reopens():
+    sm = _sm()
+    sm.step(current_d_m=ORIGIN_D, lane_blocked=True, adjacent_clear=True)
+    sm.step(current_d_m=ORIGIN_D, lane_blocked=False, adjacent_clear=True)  # unblocked
+    assert sm.state is LaneChangeState.LANE_KEEP
+
+
+def test_state_machine_completes_the_change_and_swaps_the_reference_lane():
+    sm = _sm()
+    for _ in range(3):
+        sm.step(current_d_m=ORIGIN_D, lane_blocked=True, adjacent_clear=True)
+    assert sm.state is LaneChangeState.EXECUTE_LANE_CHANGE
+    sm.step(current_d_m=ADJ_D, lane_blocked=False, adjacent_clear=True)   # arrived
+    assert sm.state is LaneChangeState.LANE_KEEP
+    assert sm.origin_lane_d_m == pytest.approx(ADJ_D)
+
+
+def test_state_machine_aborts_mid_change_when_adjacent_lane_closes():
+    sm = _sm()
+    for _ in range(3):
+        sm.step(current_d_m=ORIGIN_D, lane_blocked=True, adjacent_clear=True)
+    # 40 % across, adjacent lane suddenly no longer clear
+    d_mid = ORIGIN_D + 0.40 * (ADJ_D - ORIGIN_D)
+    allowed = sm.step(current_d_m=d_mid, lane_blocked=True, adjacent_clear=False)
+    assert sm.state is LaneChangeState.ABORT_LANE_CHANGE
+    assert allowed == [ORIGIN_D]
+
+
+def test_state_machine_does_not_abort_past_the_point_of_no_return():
+    sm = _sm()
+    for _ in range(3):
+        sm.step(current_d_m=ORIGIN_D, lane_blocked=True, adjacent_clear=True)
+    d_late = ORIGIN_D + 0.92 * (ADJ_D - ORIGIN_D)   # > abort_progress_max
+    sm.step(current_d_m=d_late, lane_blocked=True, adjacent_clear=False)
+    assert sm.state is LaneChangeState.EXECUTE_LANE_CHANGE   # finish, don't abort
+
+
+def test_gate_8_1_mid_maneuver_abort_trajectory_is_within_envelope():
+    """Gate 8.1 -- abort at ~50 % lateral completion: the planner's quintic
+    back to the origin lane stays under the comfort envelope
+    (|a_lat| < 1.8 m/s^2 target; feasibility filter enforces <= 2.0) with
+    zero road-boundary violations, from a realistic mid-change ego state
+    (moving toward the adjacent lane at ~0.9 m/s)."""
+    d_mid = ORIGIN_D + 0.5 * (ADJ_D - ORIGIN_D)          # 3.5 m, half way
+    start = PlannerStart(s0=0.0, sd0=13.9, sdd0=0.0,
+                         d0=d_mid, dd0=0.9, ddd0=0.0)     # still crossing
+    ctx = PlannerContext(target_speed_mps=13.9, lane_center_d_m=ORIGIN_D,
+                         max_speed_mps=40.0, dt=0.1,
+                         allowed_lane_centers_m=[ORIGIN_D])  # ABORT -> aim back
+    traj = plan(start, ctx)
+    assert traj is not None
+    assert traj.peak_lat_accel_mps2 < 1.8
+    assert traj.peak_lat_jerk_mps3 <= 1.5 + 1e-9
+    for _, d in traj.d_samples:
+        assert abs(d) <= DEFAULT_CONFIG.road_half_width_m - DEFAULT_CONFIG.edge_margin_m
