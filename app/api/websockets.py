@@ -18,7 +18,7 @@ from app.services.executor import MultiRateExecutor
 from app.services.inference import pipeline
 from app.services.physics_engine import PhysicsEngine
 from app.services.driver_scoring import DriverScorer
-from app.services.routing import get_route
+from app.services.routing import get_route, synthetic_highway_route
 from app.services.scenario_engine import ScenarioEngine
 from sqlalchemy.future import select
 from datetime import datetime, timezone
@@ -94,13 +94,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     session_id = str(uuid.uuid4())
     scorer = DriverScorer(window_size=60)
-    # Default route is a US-101 Peninsula freeway stretch (San Bruno ->
-    # Burlingame) rather than downtown city streets: OSRM keeps it on the
-    # freeway, so the driver gets long straights + gentle sweepers and no
-    # ~90 deg junctions to negotiate. City destinations are still reachable
-    # via set_destination.
     physics = PhysicsEngine(start_lat=37.6314, start_lng=-122.4110)
-    physics.set_destination(37.5850, -122.3520)  # Default: US-101 @ Burlingame
     scenario_engine = ScenarioEngine()
     
     disconnected = False
@@ -112,49 +106,50 @@ async def websocket_endpoint(websocket: WebSocket):
 
     await create_stream_session(session_id)
 
-    #  fetch a real road-following route in the background (the
-    # routing call can take 1-2s -- the car keeps driving on the
-    # straight-line fallback in the meantime, then snaps onto the real
-    # route once this resolves). Pushed to the client as a one-time
-    # "route" message rather than resent every tick; the frontend renders
-    # the full path and slices it locally using navigation.route_index.
-    async def fetch_and_apply_route(origin_lat, origin_lng, dest_lat, dest_lng):
-        route_data = await get_route(origin_lat, origin_lng, dest_lat, dest_lng)
-        if not route_data:
-            return  # routing service unavailable -- straight-line fallback already active
-        waypoints, steps = route_data
-        
-        if (physics.target_lat, physics.target_lng) != (dest_lat, dest_lng):
-            # A newer set_destination happened while this fetch was in
-            # flight -- discard this now-stale route rather than
-            # overwriting the route for the current destination.
-            return
-        physics.set_route(waypoints)
+    async def _send_route(steps):
+        """Push physics.route (the spline-smoothed, uniformly resampled
+        path the car actually drives) + turn steps to the client as a
+        one-time "route" message. Sending the raw waypoints instead would
+        reintroduce the backend/frontend world-disagreement fixed earlier."""
         if disconnected:
             return
         try:
             await websocket.send_json({
                 "type": "route",
-                #  send physics.route (the spline-smoothed, uniformly
-                # resampled path) rather than the raw OSRM waypoints, so the
-                # rendered road is exactly the path the car is actually
-                # driving. Sending the raw polyline here would reintroduce the
-                # backend/frontend world-disagreement that the previous had to fix.
                 "waypoints": [[lat, lng] for lat, lng in physics.route],
-                "steps": steps
+                "steps": steps,
             })
         except Exception as e:
             logger.warning(f"Failed to send route to client (likely disconnected): {e}")
+
+    async def fetch_and_apply_route(origin_lat, origin_lng, dest_lat, dest_lng):
+        """Real road-following route for an operator-chosen destination
+        (OSRM, ~1-2 s). The car keeps driving the current route until this
+        resolves, then snaps onto the new one."""
+        route_data = await get_route(origin_lat, origin_lng, dest_lat, dest_lng)
+        if not route_data:
+            return  # routing service unavailable -- keep the current route
+        waypoints, steps = route_data
+        if (physics.target_lat, physics.target_lng) != (dest_lat, dest_lng):
+            # A newer set_destination happened mid-flight -- discard.
+            return
+        physics.set_route(waypoints)
+        await _send_route(steps)
+
+    # DEFAULT ROUTE: a procedurally-generated freeway centreline (long
+    # straights + gentle sweepers, min radius ~800 m). A city point-to-
+    # point default routes through ~90 deg junctions and on/off ramps with
+    # no room to turn -- an easy highway is the right place to start a
+    # demo. Real OSRM routing still runs on any set_destination command.
+    _hw = synthetic_highway_route(physics.lat, physics.lng)
+    physics.set_destination(_hw[-1][0], _hw[-1][1])  # so arrival/distance logic has a real endpoint
+    physics.set_route(_hw)
+    await _send_route([])
 
     # Tracked so the finally block can cancel + await it -- an orphan
     # create_task() that outlives the endpoint keeps the event loop busy and
     # (on some starlette/anyio builds) wedges the TestClient portal shutdown.
     background_tasks: List[asyncio.Task] = []
-    background_tasks.append(
-        asyncio.create_task(
-            fetch_and_apply_route(physics.lat, physics.lng, physics.target_lat, physics.target_lng)
-        )
-    )
 
     # Background task to listen for commands
     async def listen_for_commands():

@@ -98,3 +98,41 @@ async def get_route(
         _route_cache.popitem(last=False)
         
     return result
+
+
+def synthetic_highway_route(
+    origin_lat: float,
+    origin_lng: float,
+    length_m: float = 5200.0,
+    step_m: float = 100.0,
+) -> List[Tuple[float, float]]:
+    """A procedurally-generated freeway centreline: long straights with a
+    couple of gentle sweepers (min radius ~800 m -> ~0.25 m/s^2 lateral at
+    50 km/h, i.e. no speed penalty). Used as the DEFAULT route so the drive
+    starts on an easy highway instead of a city point-to-point full of
+    ~90 deg junctions and on/off ramps. Real routing (get_route) still runs
+    whenever the operator picks a destination.
+
+    Returned as (lat, lng) waypoints -- the same shape get_route yields --
+    so PhysicsEngine.set_route() consumes it unchanged.
+    """
+    import math
+
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lng = 111_320.0 * math.cos(math.radians(origin_lat))
+
+    pts: List[Tuple[float, float]] = [(origin_lat, origin_lng)]
+    heading = 0.0  # radians, 0 = due north (+lat)
+    x = 0.0
+    y = 0.0
+    n = max(2, int(length_m / step_m))
+    for i in range(1, n + 1):
+        u = i / n
+        # Curvature profile (1/m): two smooth sweepers, both well within
+        # comfortable freeway geometry. Peak |kappa| ~ 1/800.
+        kappa = 0.00120 * math.sin(u * math.pi * 2.0) + 0.00055 * math.sin(u * math.pi * 5.0)
+        heading += kappa * step_m
+        x += math.sin(heading) * step_m
+        y += math.cos(heading) * step_m
+        pts.append((origin_lat + y / m_per_deg_lat, origin_lng + x / m_per_deg_lng))
+    return pts
