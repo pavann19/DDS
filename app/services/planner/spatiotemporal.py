@@ -106,6 +106,13 @@ class PlannerContext:
 
 @dataclass(frozen=True)
 class PlannedTrajectory:
+    # The winning polynomials -- the caller COMMITS to these and samples
+    # them at the elapsed maneuver time each tick, re-planning only on an
+    # event (abort, plan expiry, large tracking error). Sampling a fresh
+    # plan at t = dt every tick would keep the car stuck in the quintic's
+    # near-zero-velocity opening and the maneuver would never progress.
+    lat_poly: QuinticPolynomial
+    lon_poly: QuarticPolynomial
     d_samples: Tuple[Tuple[float, float], ...]   # (t, d)
     s_samples: Tuple[Tuple[float, float], ...]   # (t, s)
     cost: float
@@ -119,6 +126,12 @@ class PlannedTrajectory:
     v1_mps: float
     d_target_m: float
     v_target_mps: float
+    # winning lateral quintic's lateral velocity / acceleration one tick
+    # ahead -- the caller feeds these back as the next tick's (dd0, ddd0)
+    # so a receding-horizon re-plan carries the maneuver's lateral motion
+    # forward instead of restarting from ~zero every tick.
+    d_vel_target_mps: float
+    d_acc_target_mps2: float
     n_candidates_evaluated: int
     n_candidates_feasible: int
 
@@ -261,6 +274,8 @@ def plan(
             s_samples = tuple((t_eval * i / n, lon.pos(t_eval * i / n)) for i in range(n + 1))
             dt = max(ctx.dt, 1e-3)
             best = PlannedTrajectory(
+                lat_poly=lat,
+                lon_poly=lon,
                 d_samples=d_samples,
                 s_samples=s_samples,
                 cost=cost,
@@ -281,6 +296,8 @@ def plan(
                 v1_mps=v1,
                 d_target_m=lat.pos(min(dt, t_lat)),
                 v_target_mps=max(0.0, lon.vel(min(dt, t_lon))),
+                d_vel_target_mps=lat.vel(min(dt, t_lat)),
+                d_acc_target_mps2=lat.acc(min(dt, t_lat)),
                 n_candidates_evaluated=0,   # filled after the loop
                 n_candidates_feasible=0,
             )

@@ -66,6 +66,11 @@ class LateralCandidate:
     safety_cost: float
     progress_cost: float
     is_lane_change: bool = False
+    # Set by the caller after selection (the decoupled path compares
+    # d_target to planner_chosen_d_m instead; the Phase 8 joint path sets
+    # this flag directly since its winning d1 need not equal any fan-out
+    # offset).
+    is_chosen: bool = False
 
 
 def quintic_lateral_maneuver_cost(d0: float, d1: float, horizon_s: float) -> float:

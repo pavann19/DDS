@@ -12,6 +12,7 @@ from app.services.frenet import (
     project_to_frenet,
     frenet_to_local_xz,
     frenet_to_latlng,
+    latlng_to_local,
 )
 from app.services.car_following import idm_acceleration
 from app.services import safety_shield
@@ -19,7 +20,18 @@ from app.services.world import advance_position, step_powertrain
 from app.services.driver import plan_lateral_offset, SafetyMonitor
 from app.services.perception.perception_engine import SurroundPerceptionEngine
 from app.services.prediction import PredictionEngine
-from app.services.planner import LANE_CENTER_D_M
+from app.services.planner import (
+    LANE_CENTER_D_M,
+    LANE_CHANGE_TRIGGER_GAP_M,
+    generate_candidates,
+    pure_pursuit_steering,
+)
+from app.services.planner.spatiotemporal import (
+    PlannerContext,
+    PlannerStart,
+    plan as plan_spatiotemporal,
+)
+from app.services.planner.state_machine import LaneChangeState, LaneChangeStateMachine
 
 # Fixed simulation substep (ADR-001 item 4): 50 Hz. update() quantises its
 # dt onto this grid to advance a deterministic SimClock; the physics
@@ -166,6 +178,22 @@ class PhysicsEngine:
         self.lateral_target_d_m = LANE_CENTER_D_M
         self.planner_candidates = []
         self.planner_chosen_d_m = LANE_CENTER_D_M
+        # Phase 8: joint spatiotemporal planner + lane-change state machine.
+        self._lc_sm = LaneChangeStateMachine(
+            origin_lane_d_m=EGO_LANE_OFFSET_M, adjacent_lane_d_m=ADJACENT_LANE_OFFSET_M
+        )
+        self._prev_lat_offset_m = EGO_LANE_OFFSET_M
+        self._prev_lat_speed_mps = 0.0
+        self._lat_speed_mps = 0.0
+        self._lat_accel_mps2 = 0.0
+        self.spatiotemporal_traj = None          # last PlannedTrajectory or None
+        self._planner_v_target_mps = None        # winner's speed target, or None (fallback)
+        self._changing_lane_now = False
+        self._maneuver_traj = None               # committed PlannedTrajectory for the current maneuver
+        self._maneuver_t = 0.0                    # elapsed time along the committed maneuver
+        self._maneuver_replanned_for_abort = False
+        self._committed_d_target = LANE_CENTER_D_M
+        self._committed_v_target = 0.0
         # Default "nothing to report yet" verdict -- legacy never runs the
         # shield at all (it's the untouched P6-6 A/B control), and the
         # bicycle controller doesn't populate a real one until its first
@@ -279,6 +307,20 @@ class PhysicsEngine:
         self.planner_candidates = []
         self.planner_chosen_d_m = LANE_CENTER_D_M
         self.shield_verdict = safety_shield.ShieldVerdict(approved=True, risk_level=safety_shield.RISK_NONE)
+        if hasattr(self, "_lc_sm"):
+            self._lc_sm = LaneChangeStateMachine(
+                origin_lane_d_m=EGO_LANE_OFFSET_M, adjacent_lane_d_m=ADJACENT_LANE_OFFSET_M
+            )
+            self._prev_lat_offset_m = EGO_LANE_OFFSET_M
+            self._prev_lat_speed_mps = 0.0
+            self._lat_speed_mps = 0.0
+            self._lat_accel_mps2 = 0.0
+            self.spatiotemporal_traj = None
+            self._planner_v_target_mps = None
+            self._changing_lane_now = False
+            self._maneuver_traj = None
+            self._maneuver_t = 0.0
+            self._maneuver_replanned_for_abort = False
         if hasattr(self, "safety_monitor"):
             self.safety_monitor.reset()
 
@@ -564,32 +606,173 @@ class PhysicsEngine:
                     # because it touches self.traffic; the planner is handed
                     # only the resulting bool, never the NPC list.
                     lead_gap_m = self.sensed_lead.gap_m if self.sensed_lead else None
+                    # "Adjacent lane" is relative to the lane the ego is
+                    # currently in, which the state machine flips after a
+                    # completed change.
+                    _cur_lane_d = self._lc_sm.origin_lane_d_m
+                    _adj_lane_d = self._lc_sm.adjacent_lane_d_m
                     adjacent_lane_clear = (
-                        self.traffic.sense_lane_clear(self.current_station_m, ADJACENT_LANE_OFFSET_M)
+                        self.traffic.sense_lane_clear(self.current_station_m, _adj_lane_d)
                         if self.traffic is not None else False
                     )
-                    lateral_plan = plan_lateral_offset(
-                        current_lateral_offset_m=self.current_lateral_offset_m,
-                        lead_gap_m=lead_gap_m,
-                        adjacent_lane_clear=adjacent_lane_clear,
-                        lateral_target_d_m=self.lateral_target_d_m,
-                        frenet_frame=self.frenet_frame,
-                        current_station_m=self.current_station_m,
-                        ego_lat=self.lat,
-                        ego_lng=self.lng,
-                        heading_deg=self.heading,
-                        v_mps=v_mps,
-                        dt=dt,
-                        steer_limit_rad=steer_limit,
-                        lateral_target_rate_mps=self.LATERAL_TARGET_RATE_MPS,
-                        pp_lookahead_k=self.PP_LOOKAHEAD_K,
-                        pp_lookahead_min_m=self.PP_LOOKAHEAD_MIN_M,
-                        wheelbase_m=self.WHEELBASE_M,
+
+                    # --- Phase 8: lane-change state machine + joint planner ---
+                    # The state machine runs every tick (cheap) to catch the
+                    # blocked-lane / adjacent-clear trigger and manage a
+                    # lane change's lifecycle. The joint spatiotemporal
+                    # planner is only invoked while a maneuver is actually in
+                    # progress (EXECUTE / ABORT) -- steady-state lane keeping
+                    # stays on the validated decoupled planner, so its
+                    # behaviour (cruise speed, waypoint progress, arrival,
+                    # determinism) is unchanged and the ~250-candidate search
+                    # is not paid on every tick.
+                    d0 = self.current_lateral_offset_m
+                    _raw_dd = (d0 - self._prev_lat_offset_m) / dt if dt > 1e-6 else 0.0
+                    self._lat_speed_mps = 0.5 * self._lat_speed_mps + 0.5 * max(-2.0, min(2.0, _raw_dd))
+                    _raw_ddd = (self._lat_speed_mps - self._prev_lat_speed_mps) / dt if dt > 1e-6 else 0.0
+                    self._lat_accel_mps2 = 0.5 * self._lat_accel_mps2 + 0.5 * max(-3.0, min(3.0, _raw_ddd))
+                    self._prev_lat_offset_m = d0
+                    self._prev_lat_speed_mps = self._lat_speed_mps
+
+                    lane_blocked = lead_gap_m is not None and lead_gap_m < LANE_CHANGE_TRIGGER_GAP_M
+                    allowed_lanes = self._lc_sm.step(
+                        current_d_m=d0, lane_blocked=lane_blocked, adjacent_clear=adjacent_lane_clear,
                     )
-                    self.planner_candidates = lateral_plan.candidates
-                    self.planner_chosen_d_m = lateral_plan.chosen_d_m
-                    self.lateral_target_d_m = lateral_plan.lateral_target_d_m
-                    desired_steer = lateral_plan.desired_steer_rad
+                    maneuvering = self._lc_sm.state in (
+                        LaneChangeState.EXECUTE_LANE_CHANGE,
+                        LaneChangeState.ABORT_LANE_CHANGE,
+                    )
+
+                    # Commit-and-execute: plan the maneuver ONCE, then follow
+                    # the committed quintic at its elapsed time, re-planning
+                    # only on an event (abort, plan expiry, or the ego
+                    # drifting > 0.7 m off the committed line). Re-solving the
+                    # full lattice every tick and sampling it at t = dt keeps
+                    # the car pinned in the quintic's near-zero-velocity
+                    # opening -- the maneuver never actually progresses.
+                    traj = None
+                    is_abort = self._lc_sm.state is LaneChangeState.ABORT_LANE_CHANGE
+                    if maneuvering:
+                        _cruise_mps = 50.0 / 3.6
+                        _curve_cap_mps = (
+                            math.sqrt(self.A_LAT_MAX_MPS2 / max_curvature)
+                            if max_curvature > 1e-6 else _cruise_mps * 2.0
+                        )
+                        _mt = self._maneuver_traj
+                        _need_replan = (
+                            _mt is None
+                            or (is_abort and not self._maneuver_replanned_for_abort)
+                            or self._maneuver_t >= _mt.t_lat_s - 1e-6
+                            or abs(d0 - _mt.lat_poly.pos(min(self._maneuver_t, _mt.t_lat_s))) > 1.2
+                        )
+                        if _need_replan:
+                            # Seed lateral velocity/accel from the committed
+                            # line where we are (so an abort or mid-maneuver
+                            # re-plan inherits real lateral motion), else the
+                            # smoothed measurement.
+                            if _mt is not None:
+                                _te = min(self._maneuver_t, _mt.t_lat_s)
+                                _dd0 = _mt.lat_poly.vel(_te)
+                                _ddd0 = _mt.lat_poly.acc(_te)
+                            else:
+                                _dd0, _ddd0 = self._lat_speed_mps, self._lat_accel_mps2
+                            _mt = plan_spatiotemporal(
+                                PlannerStart(
+                                    s0=self.current_station_m, sd0=v_mps, sdd0=self.acceleration_mps2,
+                                    d0=d0, dd0=_dd0, ddd0=_ddd0,
+                                ),
+                                PlannerContext(
+                                    target_speed_mps=_cruise_mps,
+                                    lane_center_d_m=allowed_lanes[0],
+                                    max_speed_mps=min(_cruise_mps, _curve_cap_mps),
+                                    dt=dt,
+                                    frenet_frame=self.frenet_frame,
+                                    risk_field=(
+                                        self.prediction_result.risk_field
+                                        if self.prediction_result is not None else None
+                                    ),
+                                    allowed_lane_centers_m=allowed_lanes,
+                                ),
+                            )
+                            self._maneuver_traj = _mt
+                            self._maneuver_t = 0.0
+                            self._maneuver_replanned_for_abort = is_abort
+                        if _mt is not None:
+                            self._maneuver_t += dt
+                            # Track the committed line ~0.8 s AHEAD of the
+                            # elapsed time so pure pursuit always has a real
+                            # lateral error to steer out (mirrors the
+                            # decoupled planner's 1 m/s rate-limited lead).
+                            _te_lat = min(self._maneuver_t + 0.8, _mt.t_lat_s)
+                            _te_lon = min(self._maneuver_t, _mt.t_lon_s)
+                            traj = _mt
+                            self._committed_d_target = _mt.lat_poly.pos(_te_lat)
+                            self._committed_v_target = max(0.0, _mt.lon_poly.vel(_te_lon))
+
+                    if traj is not None:
+                        # Follow the committed maneuver this tick.
+                        self.spatiotemporal_traj = traj
+                        self.lateral_target_d_m = self._committed_d_target
+                        self._planner_v_target_mps = self._committed_v_target
+                        self.planner_chosen_d_m = traj.d1_m
+                        self._changing_lane_now = True
+                        self.planner_candidates = generate_candidates(
+                            current_d=d0, lead_gap_m=lead_gap_m,
+                            adjacent_lane_clear=adjacent_lane_clear,
+                        )
+                        _pick = min(self.planner_candidates, key=lambda c: abs(c.d_target - traj.d1_m))
+                        for _c in self.planner_candidates:
+                            _c.is_chosen = _c is _pick
+                        # A committed maneuver is a lane change even if the
+                        # lead that triggered it has since left the ego lane
+                        # (so generate_candidates no longer emits a
+                        # lane-change candidate). The state machine is the
+                        # authority here.
+                        _pick.is_lane_change = _pick.is_lane_change or self._changing_lane_now
+                        _look_m = self.PP_LOOKAHEAD_K * v_mps + self.PP_LOOKAHEAD_MIN_M
+                        _lx, _lz, _, _ = frenet_to_local_xz(
+                            self.frenet_frame, self.current_station_m + _look_m, self.lateral_target_d_m,
+                        )
+                        _ex, _ez = latlng_to_local(
+                            self.lat, self.lng, self.frenet_frame.origin_lat, self.frenet_frame.origin_lng,
+                        )
+                        _dx, _dz = _lx - _ex, _lz - _ez
+                        desired_steer = pure_pursuit_steering(
+                            self.heading, _dx, _dz, math.hypot(_dx, _dz), self.WHEELBASE_M,
+                        )
+                        desired_steer = max(-steer_limit, min(steer_limit, desired_steer))
+                    else:
+                        # Steady-state lane keeping -- validated decoupled planner, unchanged.
+                        lateral_plan = plan_lateral_offset(
+                            current_lateral_offset_m=self.current_lateral_offset_m,
+                            lead_gap_m=lead_gap_m,
+                            adjacent_lane_clear=adjacent_lane_clear,
+                            lateral_target_d_m=self.lateral_target_d_m,
+                            frenet_frame=self.frenet_frame,
+                            current_station_m=self.current_station_m,
+                            ego_lat=self.lat,
+                            ego_lng=self.lng,
+                            heading_deg=self.heading,
+                            v_mps=v_mps,
+                            dt=dt,
+                            steer_limit_rad=steer_limit,
+                            lateral_target_rate_mps=self.LATERAL_TARGET_RATE_MPS,
+                            pp_lookahead_k=self.PP_LOOKAHEAD_K,
+                            pp_lookahead_min_m=self.PP_LOOKAHEAD_MIN_M,
+                            wheelbase_m=self.WHEELBASE_M,
+                            lane_center_d_m=_cur_lane_d,
+                            adjacent_lane_d_m=_adj_lane_d,
+                        )
+                        self.spatiotemporal_traj = None
+                        self._planner_v_target_mps = None
+                        self._changing_lane_now = False
+                        self._maneuver_traj = None
+                        self._maneuver_t = 0.0
+                        self._maneuver_replanned_for_abort = False
+                        self.planner_candidates = lateral_plan.candidates
+                        self.planner_chosen_d_m = lateral_plan.chosen_d_m
+                        self.lateral_target_d_m = lateral_plan.lateral_target_d_m
+                        desired_steer = lateral_plan.desired_steer_rad
                 else:
                     # No route: fall back to the previous proportional heading
                     # controller chasing target_lat/target_lng directly (a
@@ -742,6 +925,19 @@ class PhysicsEngine:
                     if tracking_cap_kmh < target_speed:
                         target_speed = tracking_cap_kmh
                         self.speed_limit_reason = "tracking_correction"
+
+            # Phase 8: the joint planner's longitudinal profile. Its
+            # velocity-keeping quartic already respects the curvature cap
+            # (fed in as max_speed_mps) and adds a jointly-optimised speed
+            # for the chosen line -- e.g. it eases off slightly *through* a
+            # committed lane change. Composed as one more min() cap; the
+            # IDM / predictive / Safety-Shield vetoes still run below.
+            if self._planner_v_target_mps is not None:
+                planner_cap_kmh = self._planner_v_target_mps * 3.6
+                if planner_cap_kmh < target_speed - 0.1:
+                    target_speed = planner_cap_kmh
+                    if self.speed_limit_reason == "cruise":
+                        self.speed_limit_reason = "spatiotemporal_plan"
 
         if self.controller == "legacy":
             speed_diff = target_speed - self.speed_kmh
@@ -1028,7 +1224,7 @@ class PhysicsEngine:
             {
                 "d_target": c.d_target,
                 "cost": c.cost,
-                "is_chosen": c.d_target == self.planner_chosen_d_m,
+                "is_chosen": bool(getattr(c, "is_chosen", False)) or c.d_target == self.planner_chosen_d_m,
                 "is_lane_change": c.is_lane_change,
             }
             for c in self.planner_candidates

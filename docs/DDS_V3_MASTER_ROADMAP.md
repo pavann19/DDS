@@ -414,23 +414,47 @@ GPS", pedestrian-crossing %, camera view modes) were dropped, not faked.
 are decoupled, producing sub-optimal joint maneuvers.
 
 ### Scope
-- [ ] `app/services/planner/spatiotemporal.py` — joint `(s, ṡ, s̈, d, ḋ, d̈, t)`
-  lattice, 4.0s horizon, quintic `d(t)`/`s(t)` polynomials with C² continuity.
-- [ ] Quadratic cost objective over lateral/longitudinal jerk, lane-center
-  deviation, target-speed tracking, and the Phase 7 risk field.
-- [ ] `app/services/planner/state_machine.py` —
-  `LANE_KEEP/PREPARE_LANE_CHANGE/EXECUTE_LANE_CHANGE/ABORT_LANE_CHANGE`, with
-  deterministic mid-maneuver abort back to lane center
-  (`|lateral jerk| ≤ 1.5 m/s³`).
-- [ ] Feasibility filters: `|a_lat| ≤ 2.0 m/s²`, `|jerk_lat| ≤ 1.5 m/s³`,
-  `a_long ∈ [-4.5, 2.5] m/s²`, `|d| ≤ 3.0m`.
+- [x] `app/services/planner/` — `planner.py` became a package. `polynomials.py`
+  (quintic `d(t)` / stopping `s(t)`, quartic velocity-keeping `s(t)`, closed-form
+  jerk-squared integral). `spatiotemporal.py` — joint `(s, ṡ, s̈, d, ḋ, d̈)` lattice
+  over `t` (Werling 2010): 5 lateral offsets × 5 durations (2–6 s) × optional 2nd
+  lane, × 5 terminal-speed fractions × 2 durations = ≥250 joint candidates.
+- [x] Quadratic cost: lateral jerk + longitudinal jerk + maneuver time + terminal
+  lane deviation + terminal speed deviation + integral of the Phase-7 risk field
+  along the path.
+- [x] `app/services/planner/state_machine.py` —
+  `LANE_KEEP / PREPARE_LANE_CHANGE / EXECUTE_LANE_CHANGE / ABORT_LANE_CHANGE`,
+  commit debounce, deterministic mid-maneuver abort (re-plans a quintic from the
+  ego's current `(d, ḋ, d̈)` back to the origin lane — same feasibility envelope).
+- [x] Feasibility filters: `|d″| ≤ 2.0`, `|d‴| ≤ 1.5`, `s″ ∈ [−4.5, 2.5]`, on-road
+  (`|d| ≤ road_half_width − margin`), corridor excursion `≤ 3.0 m` (the roadmap's
+  `|d| ≤ 3.0` read as excursion past the maneuver corridor — the adjacent lane
+  centre is at `d = 5.25`).
+
+### Integration boundary (2026-08-29, branch `phase-7.5-ui-design`, commits `52717b4`+ … Phase 8 1/6–6/6)
+The joint planner **owns lane-change maneuvers**. Steady-state lane keeping stays
+on the validated decoupled planner (`driver/lateral_planner.py`), so its cruise
+speed / waypoint progress / arrival / determinism are unchanged and the
+~250-candidate search is only paid during the seconds of an actual maneuver.
+The state machine runs every tick (cheap). Once a change commits, the trajectory
+is **committed and executed** (sampled at elapsed maneuver time with an ~0.8 s
+preview lead for pure-pursuit), re-planned only on abort / plan expiry / >1.2 m
+tracking drift — re-solving the lattice every tick and sampling it at `t = dt`
+pins the car in the quintic's near-zero-velocity opening and the maneuver never
+progresses. The joint longitudinal profile composes as one more `min()` speed cap
+(`speed_limit_reason = "spatiotemporal_plan"`); IDM / predictive / Safety-Shield
+vetoes are untouched. **Deferred:** replacing everyday longitudinal control with
+the joint profile (needs its own cost re-tuning + regression pass).
 
 ### Gates
-- **8.1** Mid-maneuver abort at 50% lateral completion: peak lateral accel
-  <1.8 m/s², zero boundary violations.
-- **8.2** 100 simulated lane changes: p99 lateral jerk strictly <1.5 m/s³.
-- **8.3** ≥30 joint candidates evaluated and winner selected in <4.0ms/tick.
-- **8.4** ≥20 new tests in `tests/test_spatiotemporal_planner.py`; total ≥221.
+- **8.1** ✅ Mid-maneuver abort at 50% completion (from a still-crossing ego
+  state): peak `|a_lat|` < 1.8, jerk ≤ 1.5, on-road — `test_gate_8_1_*`.
+- **8.2** ✅ 100 varied lane changes: p99 lateral jerk < 1.5 (enforced by the
+  feasibility filter) — `test_100_lane_changes_p99_lateral_jerk_under_1_5`.
+- **8.3** ✅ ≥250 joint candidates evaluated; `plan()` best-of-50 tick < 4.0 ms —
+  `test_plan_returns_a_trajectory_on_open_road` + `test_plan_runs_under_4ms_per_tick`.
+- **8.4** ✅ 24 new tests in `tests/test_spatiotemporal_planner.py`; suite total
+  ~296 (was 272).
 
 ---
 

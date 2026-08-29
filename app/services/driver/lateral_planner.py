@@ -68,11 +68,23 @@ def plan_lateral_offset(
     pp_lookahead_k: float,
     pp_lookahead_min_m: float,
     wheelbase_m: float,
+    lane_center_d_m: Optional[float] = None,
+    adjacent_lane_d_m: Optional[float] = None,
 ) -> LateralPlan:
+    # After a completed lane change the "current lane" is the one the ego
+    # moved into -- the caller (physics_engine, via the Phase 8 state
+    # machine) passes it here so the decoupled planner keeps the car in
+    # that lane instead of pulling back to the module-default centre.
+    gc_kwargs = {}
+    if lane_center_d_m is not None:
+        gc_kwargs["lane_center_d"] = lane_center_d_m
+    if adjacent_lane_d_m is not None:
+        gc_kwargs["adjacent_lane_d"] = adjacent_lane_d_m
     candidates = generate_candidates(
         current_d=current_lateral_offset_m,
         lead_gap_m=lead_gap_m,
         adjacent_lane_clear=adjacent_lane_clear,
+        **gc_kwargs,
     )
     best = select_best_candidate(candidates)
     chosen_d_m = best.d_target

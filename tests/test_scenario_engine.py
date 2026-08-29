@@ -135,16 +135,27 @@ def test_traffic_overtake_scenario_triggers_lane_change():
 
     assert lane_change_initiated, "Candidate planner did not trigger a lane-change candidate"
 
-    # Advance more ticks to verify lateral transition towards adjacent lane (5.25m)
-    for _ in range(40):
+    # Advance until the maneuver completes (Phase 8: the lane change is now a
+    # comfort-bounded joint (s, d, t) quintic -- ~6 s for a full lane width
+    # under the |jerk_lat| <= 1.5 m/s^3 envelope, rather than the pre-Phase-8
+    # rate-limited 1 m/s snap -- so it needs more ticks but must stay
+    # comfortable throughout and actually reach the adjacent lane).
+    peak_lat_accel = 0.0
+    reached_adjacent = False
+    for _ in range(160):
         evt = engine.update(physics, 0.1)
         if evt:
             events.append(evt)
         physics.update("Maintain Speed", dt=0.1)
+        peak_lat_accel = max(peak_lat_accel, physics.lateral_accel_mps2)
+        if physics.current_lateral_offset_m > 4.5:   # near the adjacent lane centre (5.25 m)
+            reached_adjacent = True
+            break
 
-    assert physics.current_lateral_offset_m > 3.0, (
-        f"Lateral offset did not shift toward adjacent lane: {physics.current_lateral_offset_m}m"
+    assert reached_adjacent, (
+        f"Lane change did not reach the adjacent lane: {physics.current_lateral_offset_m:.2f} m"
     )
+    assert peak_lat_accel < 3.0, f"Lane change was not comfortable: peak a_lat {peak_lat_accel:.2f} m/s^2"
     event_types = [e["event"]["type"] for e in events]
     assert "LANE_CHANGE_INITIATED" in event_types
 
