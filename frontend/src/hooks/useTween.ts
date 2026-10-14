@@ -13,11 +13,16 @@ export function useTween(target: number, duration = 300): number {
   useEffect(() => {
     if (reduced || !Number.isFinite(target)) return;
 
-    const from = fromRef.current;
+    const from = Number.isFinite(fromRef.current) ? fromRef.current : target;
     const start = performance.now();
 
     const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / duration);
+      // RAF timestamps can precede an effect's performance.now() within a
+      // busy frame. Negative progress extrapolates away from the target and
+      // can poison subsequent animations. Bound both ends of progress.
+      const t = duration > 0 && Number.isFinite(duration)
+        ? Math.max(0, Math.min(1, (now - start) / duration))
+        : 1;
       const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
       const next = from + (target - from) * eased;
       setAnimated(next);
@@ -32,5 +37,5 @@ export function useTween(target: number, duration = 300): number {
   }, [target, duration, reduced]);
 
   if (reduced || !Number.isFinite(target)) return target;
-  return animated;
+  return Number.isFinite(animated) ? animated : target;
 }

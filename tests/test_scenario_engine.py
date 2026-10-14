@@ -56,7 +56,9 @@ def test_scenario_registry_and_metadata():
         assert s["category"] in ["normal", "traffic", "maneuver", "safety_critical"]
         assert s["description"]
         assert isinstance(s["seed"], int)
-        assert s["default_initial_speed_kmh"] > 0
+        assert s["default_initial_speed_kmh"] >= 0
+        if s['id'] == 'mapped_parking':
+            assert s['default_initial_speed_kmh'] == 0
         assert s["default_density"] in ["low", "medium", "high"]
 
 
@@ -360,3 +362,142 @@ def test_websocket_scenario_commands(stub_inference):
                     resumed_confirmed = True
                     break
         assert resumed_confirmed, "WebSocket state did not reflect is_paused=False"
+
+
+def test_erratic_cut_in_scenario():
+    """Erratic cut-in triggers VEHICLE_CUT_IN event and Safety Shield emergency response."""
+    engine = ScenarioEngine()
+    physics = _create_test_route_physics()
+    engine.load_scenario("erratic_cut_in", physics, initial_speed_kmh=50.0)
+
+    events = []
+    peak_decel = 0.0
+    start_speed = physics.speed_kmh
+    for _ in range(60):
+        evt = engine.update(physics, 0.1)
+        if evt:
+            events.append(evt)
+        physics.update("Maintain Speed", dt=0.1)
+        peak_decel = min(peak_decel, physics.acceleration_mps2)
+
+    event_types = [e["event"]["type"] for e in events]
+    assert "VEHICLE_CUT_IN" in event_types, "VEHICLE_CUT_IN event not emitted"
+    # the scripted cut-in must actually force a hard braking response from the
+    # ego's IDM / safety path -- not merely emit a narrative event
+    assert peak_decel <= -3.5, f"ego did not brake hard for the cut-in (peak {peak_decel:.2f} m/s^2)"
+    assert physics.speed_kmh < start_speed - 15.0, "ego speed barely changed despite the cut-in"
+
+
+def test_highway_merge_scenario():
+    """Highway merge accommodates adjacent merging vehicle without safety violations."""
+    engine = ScenarioEngine()
+    physics = _create_test_route_physics()
+    engine.load_scenario("highway_merge", physics, initial_speed_kmh=52.0)
+
+    events = []
+    for _ in range(50):
+        evt = engine.update(physics, 0.1)
+        if evt:
+            events.append(evt)
+        physics.update("Maintain Speed", dt=0.1)
+
+    by_type = {e["event"]["type"]: e["event"] for e in events}
+    assert "MERGE_CORRIDOR_ENTRY" in by_type, "MERGE_CORRIDOR_ENTRY event not emitted"
+    # completion event carries a MEASURED envelope, not a claimed one
+    assert "MERGE_COMPLETED" in by_type, (
+        f"merge did not complete cleanly; got {list(by_type)}"
+    )
+    meta = by_type["MERGE_COMPLETED"]["metadata"]
+    assert meta["shield_vetoed_during_merge"] is False
+    assert meta["min_sensed_gap_m"] is None or meta["min_sensed_gap_m"] > 6.0
+
+
+def test_lane_straddler_scenario():
+    """Lane straddler emits detection event and tests defensive clearance."""
+    engine = ScenarioEngine()
+    physics = _create_test_route_physics()
+    engine.load_scenario("lane_straddler", physics, initial_speed_kmh=42.0)
+
+    events = []
+    start_speed = physics.speed_kmh
+    min_speed = start_speed
+    for _ in range(140):
+        evt = engine.update(physics, 0.1)
+        if evt:
+            events.append(evt)
+        physics.update("Maintain Speed", dt=0.1)
+        min_speed = min(min_speed, physics.speed_kmh)
+
+    event_types = [e["event"]["type"] for e in events]
+    assert "LANE_STRADDLER_DETECTED" in event_types, "LANE_STRADDLER_DETECTED event not emitted"
+    # the intruding straddler must force the ego to give way (slow down),
+    # not just trigger a detection log while the ego sails past
+    assert min_speed < start_speed - 6.0, (
+        f"ego did not yield to the lane straddler (min {min_speed:.1f} vs start {start_speed:.1f} km/h)"
+    )
+
+
+def test_low_friction_curve_scenario():
+    """Low-friction curve installs a real R~90 m arc, sets friction_mu = 0.5,
+    and the wet curve cap actually binds: LOW_FRICTION_ADVISORY *and*
+    SPEED_DE_RATED fire, and the ego corners measurably slower than an
+    identical-seed dry (mu = 1.0) run while holding its lane."""
+    engine = ScenarioEngine()
+    physics = _create_test_route_physics()
+    engine.load_scenario("low_friction_curve", physics, initial_speed_kmh=55.0)
+
+    assert physics.friction_mu == 0.5, f"Expected friction_mu=0.5, got {physics.friction_mu}"
+
+    events = []
+    wet_min_speed = 1e9
+    total = physics.station_distances[-1]
+    for _ in range(600):
+        evt = engine.update(physics, 0.1)
+        if evt:
+            events.append(evt)
+        physics.update("Maintain Speed", dt=0.1)
+        if physics.current_station_m < total - 60.0:
+            wet_min_speed = min(wet_min_speed, physics.speed_kmh)
+        assert abs(physics.current_lateral_offset_m - EGO_LANE_OFFSET_M) < 0.8
+
+    event_types = [e["event"]["type"] for e in events]
+    assert "SPEED_DE_RATED" in event_types, f"friction de-rate never bound: {event_types}"
+
+    # A/B: same scenario, forced dry -> no de-rate, corners faster.
+    dry_engine = ScenarioEngine()
+    dry_phys = _create_test_route_physics()
+    dry_engine.load_scenario("low_friction_curve", dry_phys, initial_speed_kmh=55.0)
+    dry_phys.friction_mu = 1.0
+    dry_min_speed = 1e9
+    dry_total = dry_phys.station_distances[-1]
+    dry_events = []
+    for _ in range(600):
+        e = dry_engine.update(dry_phys, 0.1)
+        if e:
+            dry_events.append(e["event"]["type"])
+        dry_phys.update("Maintain Speed", dt=0.1)
+        if dry_phys.current_station_m < dry_total - 60.0:
+            dry_min_speed = min(dry_min_speed, dry_phys.speed_kmh)
+    assert "SPEED_DE_RATED" not in dry_events
+    assert wet_min_speed < dry_min_speed - 4.0, (
+        f"wet cornering ({wet_min_speed:.1f}) not slower than dry ({dry_min_speed:.1f} km/h)"
+    )
+    assert "LOW_FRICTION_ADVISORY" in event_types, "LOW_FRICTION_ADVISORY event not emitted"
+
+
+def test_scenario_runtime_parameterization():
+    """Verify runtime parameters (sensor noise, dropout, friction) are propagated."""
+    engine = ScenarioEngine()
+    physics = _create_test_route_physics()
+    engine.load_scenario(
+        "normal_cruising",
+        physics,
+        params={"sensor_noise_enabled": True, "sensor_dropout_rate": 0.05, "friction_mu": 0.75},
+    )
+
+    assert physics.traffic.sensor_noise_enabled is True
+    assert physics.traffic.sensor_dropout_rate == 0.05
+    assert physics.friction_mu == 0.75
+    state = engine.get_state()
+    assert state["params"]["sensor_noise_enabled"] is True
+

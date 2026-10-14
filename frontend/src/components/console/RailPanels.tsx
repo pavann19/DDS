@@ -1,8 +1,21 @@
 'use client';
 
 import React from 'react';
+import {
+  Gauge,
+  ScanEye,
+  Waypoints,
+  Route,
+  ShieldCheck,
+  Activity,
+  List,
+  Pin,
+  PinOff,
+  X,
+} from 'lucide-react';
 import { useSimulationStore } from '../../store/useSimulationStore';
 import { useConsole } from '../../store/useConsole';
+import { useRail } from '../../store/useRail';
 import { PanelSection, Readout, Meter, MultiStat } from '../primitives';
 import type { Tone } from '../primitives';
 import { useTween } from '../../hooks/useTween';
@@ -11,11 +24,13 @@ import { EventTimeline } from './EventTimeline';
 
 /* ----------------------------------------------------------------------------
  * The rail reads as one autonomous-system story (§11): a numbered pipeline
- *   01 EGO → 02 PERCEPTION → 03 PREDICTION → 04 PLANNER → 05 SAFETY → 06 ANALYTICS
+ *   01 EGO → 02 PERCEPTION → 03 PREDICTION → 04 PLANNER → 05 SAFETY → 06 ANALYTICS → 07 EVENTS
  * Each card is bound 1:1 to a protocol v3 channel (header tag); nothing
  * renders state the backend doesn't send. Context-aware (§12):
- * panelSalience() dims quiet cards and accents the reacting one. Density
- * governs depth — `inspect` adds raw per-track / per-candidate rows.
+ * panelSalience() dims quiet cards and accents the reacting one.
+ * In `standard` density, defaults to a 44px icon strip, expanding to a
+ * 340px single card on click with localStorage pinning. `inspect` force-expands
+ * the full 7-card stack.
  * ------------------------------------------------------------------------- */
 
 const fmt = (n: number | null | undefined, d = 1) =>
@@ -33,18 +48,32 @@ function useCtx(): ConsoleCtx {
   return { ego, shield, prediction, planner };
 }
 
+export const RAIL_SUBSYSTEMS = [
+  { id: 'ego', num: '01', title: '01 · Ego kinematics', name: 'Ego', icon: Gauge, channel: 'pose.ego' },
+  { id: 'perception', num: '02', title: '02 · Perception engine', name: 'Perception', icon: ScanEye, channel: 'semantic.perception' },
+  { id: 'prediction', num: '03', title: '03 · Prediction matrix', name: 'Prediction', icon: Waypoints, channel: 'heavy.prediction' },
+  { id: 'planner', num: '04', title: '04 · Planner', name: 'Planner', icon: Route, channel: 'semantic.planner' },
+  { id: 'safety', num: '05', title: '05 · Safety system', name: 'Safety', icon: ShieldCheck, channel: 'semantic.safety_shield' },
+  { id: 'analytics', num: '06', title: '06 · Driver analytics', name: 'Analytics', icon: Activity, channel: 'semantic.driver_analytics' },
+  { id: 'events', num: '07', title: '07 · AI activity stream', name: 'Events', icon: List, channel: 'event.stream' },
+] as const;
+
 /** 01 — pose.ego: kinematics + realised control outputs. */
 function EgoControlPanel({ index, salience }: { index: number; salience: Salience }) {
   const ego = useSimulationStore((s) => s.ego);
   const speed = Math.max(0, useTween((ego?.velocity ?? 0) * 3.6, 240));
   const d = ego?.frenet?.d ?? 0;
   const laneDesc = Math.abs(d) < 1 ? 'lane 1 (centre)' : d < -1.6 ? 'lane 2 (left / overtake)' : d > 1.6 ? 'right lane' : 'lane transition';
+  const steerDeg = ego?.steering_angle_rad !== undefined ? (ego.steering_angle_rad * (180 / Math.PI)) : ((ego?.steering_angle ?? 0) * (180 / Math.PI));
   return (
     <PanelSection title="01 · Ego kinematics" icon="⚡" channel="pose.ego" index={index} salience={salience}>
       <Readout k="current velocity" v={`${fmt(speed)} km/h`} tone="brand" />
       <Readout k="target velocity" v={`${fmt((ego?.target_velocity ?? 0) * 3.6)} km/h`} />
       <Readout k="longitudinal accel" v={`${(ego?.acceleration ?? 0) >= 0 ? '+' : ''}${fmt(ego?.acceleration, 2)} m/s²`} />
-      <Readout k="steering angle" v={`${fmt((ego?.steering_angle ?? 0) * (180 / Math.PI))}°`} />
+      <Readout k="lateral accel" v={`${fmt(ego?.lateral_accel_mps2, 2)} m/s²`} />
+      <Readout k="steering angle" v={`${fmt(steerDeg, 1)}°`} />
+      <Readout k="yaw rate" v={`${fmt(ego?.yaw_rate_degps, 1)}°/s`} />
+      <Readout k="sideslip (β)" v={`${fmt((ego?.kinematic_sideslip_rad ?? 0) * (180 / Math.PI), 2)}°`} />
       <Readout k="lane position" v={laneDesc} />
       <Readout k="station (frenet s)" v={`${fmt(ego?.frenet?.s, 0)} m`} />
       <Readout k="binding constraint" v={ego?.speed_limit_reason ?? '—'} tone="brand" />
@@ -151,7 +180,7 @@ function PlannerPanel({ index, salience }: { index: number; salience: Salience }
 /** 05 — semantic.safety_shield: the independent post-decision check. */
 function SafetyPanel({ index, salience }: { index: number; salience: Salience }) {
   const shield = useSimulationStore((s) => s.safetyShield);
-  const risk = shield?.risk_level ?? 'NONE';
+  const risk = shield?.risk_level ?? 'UNKNOWN';
   const overridden = shield?.approved === false;
   const badgeTone: Tone = overridden || risk === 'CRITICAL' || risk === 'HIGH' ? 'crit' : risk === 'MEDIUM' ? 'warn' : 'ok';
   return (
@@ -181,7 +210,7 @@ function SafetyPanel({ index, salience }: { index: number; salience: Salience })
         }}
       >
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'currentColor' }} />
-        {overridden ? 'SHIELD OVERRIDE' : `SYSTEM ${risk === 'NONE' ? 'NOMINAL' : risk}`}
+        {!shield ? 'TELEMETRY UNAVAILABLE' : overridden ? 'SHIELD OVERRIDE' : `SYSTEM ${risk === 'NONE' ? 'NOMINAL' : risk}`}
       </div>
       <Readout k="risk level" v={risk} tone={badgeTone} />
       <Readout k="time-to-collision" v={shield?.ttc_s != null ? `${fmt(shield.ttc_s)} s` : '> 9.9 s'} tone="brand" />
@@ -239,45 +268,295 @@ function EventsPanel({ index }: { index: number }) {
   );
 }
 
-/** The right rail: header + the numbered autonomy pipeline, own scroll. */
-export function Rail() {
+/** 44px vertical icon strip rendered when the rail is collapsed */
+export function RailIconStrip() {
   const ctx = useCtx();
+  const toggle = useRail((s) => s.toggle);
+  const activeCard = useRail((s) => s.activeCard);
+
+  return (
+    <nav
+      aria-label="Subsystem launcher"
+      className="dds-glass"
+      style={{
+        width: 44,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 6,
+        padding: '10px 4px',
+        borderRadius: 'var(--radius-xl)',
+        pointerEvents: 'auto',
+      }}
+    >
+      {RAIL_SUBSYSTEMS.map((sub) => {
+        const Icon = sub.icon;
+        const salience = panelSalience(sub.id, ctx);
+        const isAlert = salience === 'alert';
+        const isActive = activeCard === sub.id;
+
+        return (
+          <button
+            key={sub.id}
+            type="button"
+            onClick={() => toggle(sub.id)}
+            title={`${sub.title} (${sub.channel})`}
+            aria-label={`Open ${sub.name} telemetry panel`}
+            aria-pressed={isActive}
+            style={{
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 36,
+              height: 36,
+              borderRadius: 'var(--radius-md)',
+              border: isActive
+                ? '1px solid var(--brand)'
+                : isAlert
+                ? '1px solid var(--warning)'
+                : '1px solid transparent',
+              background: isActive
+                ? 'var(--brand-muted)'
+                : isAlert
+                ? 'var(--warning-muted)'
+                : 'transparent',
+              color: isActive
+                ? 'var(--brand)'
+                : isAlert
+                ? 'var(--warning)'
+                : 'var(--text-muted)',
+              cursor: 'pointer',
+              transition: 'all var(--dur-fast) var(--ease-out)',
+              boxShadow: isActive ? 'var(--glow-brand)' : isAlert ? 'var(--glow-warning)' : 'none',
+            }}
+          >
+            <Icon className="h-4 w-4" aria-hidden="true" />
+            {isAlert && (
+              <span
+                aria-hidden
+                style={{
+                  position: 'absolute',
+                  top: 5,
+                  right: 5,
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: 'var(--warning)',
+                  boxShadow: '0 0 6px var(--warning)',
+                }}
+              />
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** The right rail: single card drawer (in standard) or full card stack (in inspect). */
+export function Rail() {
+  const connected = useSimulationStore(s=>s.isConnected);
+  const ctx = useCtx();
+  const density = useConsole((s) => s.density);
+  const { activeCard, pinned, toggle, collapse, setPinned } = useRail();
+
+  const isInspect = density === 'inspect';
+  const selectedSub = RAIL_SUBSYSTEMS.find((s) => s.id === activeCard) ?? RAIL_SUBSYSTEMS[0];
+
+  const renderSinglePanel = (id: string) => {
+    switch (id) {
+      case 'ego':
+        return <EgoControlPanel index={0} salience={panelSalience('ego', ctx)} />;
+      case 'perception':
+        return <PerceptionPanel index={1} salience={panelSalience('perception', ctx)} />;
+      case 'prediction':
+        return <PredictionPanel index={2} salience={panelSalience('prediction', ctx)} />;
+      case 'planner':
+        return <PlannerPanel index={3} salience={panelSalience('planner', ctx)} />;
+      case 'safety':
+        return <SafetyPanel index={4} salience={panelSalience('safety', ctx)} />;
+      case 'analytics':
+        return <DriverAnalyticsPanel index={5} salience={panelSalience('analytics', ctx)} />;
+      case 'events':
+        return <EventsPanel index={6} />;
+      default:
+        return <EgoControlPanel index={0} salience={panelSalience('ego', ctx)} />;
+    }
+  };
+
   return (
     <>
+      {/* Rail Header */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '14px 16px',
+          padding: '12px 16px',
           borderBottom: '1px solid var(--border-subtle)',
-          background: 'rgba(0,0,0,0.2)',
+          background: 'var(--bg-surface)',
+          gap: 8,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
           <span
             aria-hidden
-            style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--brand)', boxShadow: '0 0 8px var(--brand)', animation: 'dds-beacon 1.5s infinite' }}
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: 'var(--brand)',
+              boxShadow: '0 0 8px var(--brand)',
+              animation: 'dds-beacon 1.5s infinite',
+              flex: 'none',
+            }}
           />
-          <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--text-bright)' }}>
-            AV OPERATIONAL TELEMETRY
+          <h2
+            style={{
+              fontFamily: 'var(--font-display)',
+              fontSize: 11.5,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              color: 'var(--text-bright)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {isInspect ? 'Vehicle information' : selectedSub.title}
           </h2>
         </div>
-        <span
-          className="font-mono"
-          style={{ fontSize: 10, fontWeight: 600, color: 'var(--brand)', background: 'var(--brand-muted)', padding: '2px 7px', borderRadius: 'var(--radius-xs)', border: '1px solid var(--brand-dim)' }}
-        >
-          10 Hz
-        </span>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 'none' }}>
+          <span
+            className="font-mono"
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              color: 'var(--brand)',
+              background: 'var(--brand-muted)',
+              padding: '2px 7px',
+              borderRadius: 'var(--radius-xs)',
+              border: '1px solid var(--brand-dim)',
+            }}
+          >
+            {connected ? 'Connected' : 'Offline'}
+          </span>
+
+          {!isInspect && (
+            <>
+              {/* Pin toggle */}
+              <button
+                type="button"
+                onClick={() => setPinned(!pinned)}
+                title={pinned ? 'Unpin panel' : 'Pin panel open'}
+                aria-pressed={pinned}
+                aria-label={pinned ? 'Unpin panel' : 'Pin panel open'}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 26,
+                  height: 26,
+                  borderRadius: 'var(--radius-xs)',
+                  border: pinned ? '1px solid var(--brand)' : '1px solid var(--border-subtle)',
+                  background: pinned ? 'var(--brand-muted)' : 'var(--bg-inset)',
+                  color: pinned ? 'var(--brand)' : 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                {pinned ? <Pin className="h-3.5 w-3.5" aria-hidden="true" /> : <PinOff className="h-3.5 w-3.5" aria-hidden="true" />}
+              </button>
+
+              {/* Close / Collapse button */}
+              <button
+                type="button"
+                onClick={collapse}
+                title="Collapse panel"
+                aria-label="Collapse panel"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 26,
+                  height: 26,
+                  borderRadius: 'var(--radius-xs)',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-inset)',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </>
+          )}
+        </div>
       </div>
+
+      {/* Subsystem quick-switch tabs when in single-card standard mode */}
+      {!isInspect && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '6px 12px',
+            borderBottom: '1px solid var(--border-subtle)',
+            background: 'rgba(0,0,0,0.1)',
+            overflowX: 'auto',
+          }}
+        >
+          {RAIL_SUBSYSTEMS.map((sub) => {
+            const Icon = sub.icon;
+            const isSel = sub.id === (activeCard ?? 'ego');
+            return (
+              <button
+                key={sub.id}
+                type="button"
+                onClick={() => toggle(sub.id)}
+                title={sub.name}
+                aria-label={`Switch to ${sub.name}`}
+                aria-pressed={isSel}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '4px 8px',
+                  borderRadius: 'var(--radius-xs)',
+                  border: isSel ? '1px solid var(--brand)' : '1px solid transparent',
+                  background: isSel ? 'var(--brand-muted)' : 'transparent',
+                  color: isSel ? 'var(--brand)' : 'var(--text-muted)',
+                  fontSize: 10,
+                  fontFamily: 'var(--font-mono)',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <Icon className="h-3 w-3" aria-hidden="true" />
+                <span>{sub.num}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Card Body */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <EgoControlPanel index={0} salience={panelSalience('ego', ctx)} />
-        <PerceptionPanel index={1} salience={panelSalience('perception', ctx)} />
-        <PredictionPanel index={2} salience={panelSalience('prediction', ctx)} />
-        <PlannerPanel index={3} salience={panelSalience('planner', ctx)} />
-        <SafetyPanel index={4} salience={panelSalience('safety', ctx)} />
-        <DriverAnalyticsPanel index={5} salience={panelSalience('analytics', ctx)} />
-        <EventsPanel index={6} />
+        {isInspect ? (
+          <>
+            <EgoControlPanel index={0} salience={panelSalience('ego', ctx)} />
+            <PerceptionPanel index={1} salience={panelSalience('perception', ctx)} />
+            <PredictionPanel index={2} salience={panelSalience('prediction', ctx)} />
+            <PlannerPanel index={3} salience={panelSalience('planner', ctx)} />
+            <SafetyPanel index={4} salience={panelSalience('safety', ctx)} />
+            <DriverAnalyticsPanel index={5} salience={panelSalience('analytics', ctx)} />
+            <EventsPanel index={6} />
+          </>
+        ) : (
+          renderSinglePanel(activeCard ?? 'ego')
+        )}
       </div>
     </>
   );

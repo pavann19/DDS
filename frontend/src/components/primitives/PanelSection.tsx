@@ -60,7 +60,7 @@ export function PanelSection({
         display: 'flex',
         flexDirection: 'column',
         gap: 'var(--space-2)',
-        opacity: salience === 'quiet' ? 0.62 : 1,
+        opacity: 1,
         animation: pulsing
           ? 'dds-pulse 0.46s var(--ease-out)'
           : `dds-slide-in var(--dur) var(--ease-out) both`,

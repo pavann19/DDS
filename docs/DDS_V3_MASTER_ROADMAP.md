@@ -578,6 +578,39 @@ options, spatial audio feedback, and interactive scenario authoring.
 
 ---
 
+## Phase 8.5 — Learned Driving Intelligence (PROPOSED — architecture TBD by I1)
+
+**Status:** design only — see `docs/ADR-003-LEARNED-DRIVING-INTELLIGENCE.md`.
+**Estimate:** ~30–50h (v0 with all six P0 siblings), soft-depends on Phase 13 (NGSIM).
+**Core intent (project owner):** "the system must drive on AI, not by ML models" —
+add a *learned* component that influences what the car decides to do, without
+giving up any deterministic feasibility or Safety-Shield guarantee.
+
+### Scope (only after ADR-003 is Accepted)
+- [ ] `PolicyObservation` builder (~64 hand-derived floats, road-tangent-normalised)
+      + a logging harness over the scenario suite / randomised traffic / routes.
+- [ ] v0 gradient-boosted ranker: score each *already-feasible* Phase-8 lattice
+      candidate; fed into `spatiotemporal.plan()` as a bounded soft cost term
+      (`w_policy`, clamped `±W_POLICY`), behind `DDS_POLICY_ENABLED` (default OFF).
+- [ ] `AIPolicyDecision` provenance record per tick (model id/version/sha256,
+      observation, raw scores, selected vs would-have-selected candidate, shield
+      intervention, latency).
+- [ ] ON/OFF A/B harness + end-to-end closed-loop test + held-out robustness eval.
+
+### Gates
+- **8.5.0** ADR-003 accepted by the owner.
+- **8.5.1** Policy OFF ⇒ `plan()` output byte-for-byte identical to pre-8.5.
+- **8.5.2** Policy ON ⇒ `plan()` still only returns feasible candidates; Safety-Shield
+  veto rate does not increase vs OFF on the scenario suite.
+- **8.5.3** Every policy tick emits a complete `AIPolicyDecision`; `model_sha256`
+  matches the loaded model.
+- **8.5.4** ON vs OFF on identical seeds: measurable behavioural difference with no
+  regression in collisions / min-TTC distribution / progress.
+- **8.5.5** Held-out seeds + densities + sensor degradation (+ NGSIM segments when
+  available): zero collisions, bounded comfort regression, fail-safe ≤ deterministic.
+
+---
+
 ## Phase 13 — Real-World NGSIM Highway Replay & Certification Suite
 **Estimate:** ~25–40h
 **Core problem:** synthetic traffic never tests against real human driving
@@ -614,6 +647,7 @@ behavior (tailgating, weaving, shockwaves).
 | 7.x | Hardening 1–7: committed ML artifacts, perf gates measured, defensive guards | +9 | 270 | 270 pass / 2 skip (pinned toolchain) |
 | 7.5 | HMI restructure — one honest AV console (ADR-002) | frontend | 270 | tsc clean, panel-contract test, denylist scan |
 | 8 | Spatiotemporal planner | +20 | 290 | mid-maneuver abort |
+| 8.5 | Learned behaviour-ranking policy (PROPOSED, ADR-003) | +~18 | — | OFF==deterministic; ON no safety regression |
 | 9 | Dynamic tire physics | +16 | 237 | step-steer, ABS |
 | 10 | Semantic map + intersections | +22 | 259 | 0 stop-line overruns |
 | 11 | RSS safety + MRM | +18 | 277 | 0 at-fault (defined set) |

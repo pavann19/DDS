@@ -263,13 +263,15 @@ class MultiTargetTracker:
         covs = self._predicted_covs[match_rows]                                # (M, 6, 6)
         measurements = np.array([[detections[det_idx].x, detections[det_idx].z] for _, det_idx in matches])  # (M, 2)
 
-        y = measurements - states @ _H.T                                       # (M, 2)
-        S = _H @ covs @ _H.T + _R                                              # (M, 2, 2)
+        # H selects position components 0:2. Slices perform the same linear
+        # algebra without multiplying by sparse selector/identity matrices.
+        y = measurements - states[:, :2]                                     # (M, 2)
+        S = covs[:, :2, :2] + _R                                              # (M, 2, 2)
         S_inv = np.linalg.inv(S)                                               # (M, 2, 2)
-        K = covs @ _H.T @ S_inv                                                # (M, 6, 2)
+        K = covs[:, :, :2] @ S_inv                                            # (M, 6, 2)
 
         new_states = states + np.einsum("mij,mj->mi", K, y)                    # (M, 6)
-        new_covs = (_I6 - K @ _H) @ covs                                        # (M, 6, 6)
+        new_covs = covs - K @ covs[:, :2, :]                                   # (M, 6, 6)
 
         for i, (track_id, _) in enumerate(matches):
             track = self.tracks[track_id]

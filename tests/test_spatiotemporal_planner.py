@@ -15,6 +15,7 @@ import time
 
 import numpy as np
 import pytest
+from app.services.frenet import FrenetFrame
 
 from app.services.planner.polynomials import QuinticPolynomial, QuarticPolynomial
 
@@ -186,7 +187,8 @@ def test_planner_prefers_the_lower_risk_lane_when_risk_field_present(monkeypatch
         lane_center_d_m=0.0,
         max_speed_mps=40.0,
         dt=0.1,
-        frenet_frame=object(),
+        frenet_frame=FrenetFrame(
+            points_xz=[(0.,0.),(0.,-200.)], station=[0.,200.], origin_lat=37., origin_lng=-122.),
         risk_field=_FakeRiskField(threshold_x=0.0, value=8.0),
         allowed_lane_centers_m=[0.0],
     )
@@ -328,3 +330,63 @@ def test_gate_8_1_mid_maneuver_abort_trajectory_is_within_envelope():
     assert traj.peak_lat_jerk_mps3 <= 1.5 + 1e-9
     for _, d in traj.d_samples:
         assert abs(d) <= DEFAULT_CONFIG.road_half_width_m - DEFAULT_CONFIG.edge_margin_m
+
+
+# ---------------------------------------------------------------------------
+# P0 (A1): friction -> planner coupling. A wet / low-grip surface must tighten
+# the *lateral* feasibility envelope, not just the upstream speed cap.
+# ---------------------------------------------------------------------------
+def _lane_change_start():
+    # starting mid-lane with a small adverse lateral velocity so the lattice
+    # has to spend real lateral accel to reach the adjacent lane centre
+    return PlannerStart(s0=0.0, sd0=13.9, sdd0=0.0, d0=1.75, dd0=0.3, ddd0=0.0)
+
+
+def _lane_change_ctx(mu=1.0):
+    # allow both the origin and the adjacent lane so the planner actually
+    # searches lane-change quintics
+    return PlannerContext(
+        target_speed_mps=13.9,
+        lane_center_d_m=1.75,
+        max_speed_mps=40.0,
+        dt=0.1,
+        allowed_lane_centers_m=(1.75, 5.25),
+        friction_mu=mu,
+    )
+
+
+def test_low_friction_tightens_lateral_feasibility_envelope():
+    dry = plan(_lane_change_start(), _lane_change_ctx(mu=1.0))
+    wet = plan(_lane_change_start(), _lane_change_ctx(mu=0.5))
+    assert dry is not None
+    # every surviving candidate on the wet surface must respect mu * a_lat_max
+    if wet is not None:
+        assert wet.peak_lat_accel_mps2 <= DEFAULT_CONFIG.max_lat_accel_mps2 * 0.5 + 1e-6
+        assert wet.peak_lat_jerk_mps3 <= DEFAULT_CONFIG.max_lat_jerk_mps3 * math.sqrt(0.5) + 1e-6
+    # and the wet lattice must be strictly more constrained than the dry one
+    assert wet is None or wet.n_candidates_feasible < dry.n_candidates_feasible
+
+
+def test_icy_surface_makes_the_aggressive_lane_change_infeasible():
+    # a fast rest-to-adjacent-lane change that is fine on dry asphalt but
+    # cannot be done within mu=0.2 grip inside the comfort-bounded quintics
+    start = PlannerStart(s0=0.0, sd0=16.0, sdd0=0.0, d0=1.75, dd0=1.2, ddd0=0.0)
+    dry_ctx = _lane_change_ctx(mu=1.0)
+    icy_ctx = _lane_change_ctx(mu=0.2)
+    dry = plan(start, dry_ctx)
+    icy = plan(start, icy_ctx)
+    assert dry is not None
+    assert icy is None or icy.peak_lat_accel_mps2 <= DEFAULT_CONFIG.max_lat_accel_mps2 * 0.2 + 1e-6
+
+
+def test_friction_mu_is_clamped_into_unit_interval():
+    # out-of-range mu must not blow up the feasibility caps
+    hi = plan(_lane_change_start(), _lane_change_ctx(mu=5.0))
+    lo = plan(_lane_change_start(), _lane_change_ctx(mu=-1.0))
+    # mu=5.0 clamps to 1.0 -> same envelope as dry
+    dry = plan(_lane_change_start(), _lane_change_ctx(mu=1.0))
+    assert (hi is None) == (dry is None)
+    if hi is not None and dry is not None:
+        assert hi.peak_lat_accel_mps2 <= DEFAULT_CONFIG.max_lat_accel_mps2 + 1e-6
+    # mu=-1.0 clamps to 0.1 -> extremely tight, almost certainly infeasible
+    assert lo is None or lo.peak_lat_accel_mps2 <= DEFAULT_CONFIG.max_lat_accel_mps2 * 0.1 + 1e-6

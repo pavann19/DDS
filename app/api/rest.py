@@ -101,7 +101,7 @@ async def get_analytics_summary(db = Depends(get_db)):
     
     return {
         "total_sessions": total_sessions or 0,
-        "avg_driver_score": avg_score or 100.0,
+        "avg_driver_score": avg_score,
         "total_predictions": total_predictions or 0,
         "recent_anomalies": [telemetry_to_dict(log) for log in anomalies.scalars().all()]
     }

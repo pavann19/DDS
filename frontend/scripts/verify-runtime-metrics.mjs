@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { createRuntimeCapture } from '../src/lib/runtimeMetrics.ts';
+const disabled=createRuntimeCapture(false,3);disabled.record('x',1);assert.deepEqual(disabled.snapshot().distributions,{});
+const c=createRuntimeCapture(true,3);for(const v of [1,2,3,4])c.record('x',v);
+assert.deepEqual(c.snapshot().distributions.x.samples_ms,[2,3,4]);assert.equal(c.snapshot().distributions.x.total_count,4);
+c.record('x',-2);c.record('x',NaN);assert.equal(c.snapshot().invalid_samples.x,2);
+c.reset();c.applied('session:1:2',{received_ms:100,forwarded_ms:102,received_wall_ms:1000},105,106,new Date(999).toISOString());c.frame(110,true);
+let s=c.snapshot();assert.equal(s.distributions.worker_to_main_queue_ms.p50_ms,3);assert.equal(s.distributions.main_store_apply_ms.p50_ms,1);assert.equal(s.distributions.main_apply_to_scene_callback_ms.p50_ms,4);assert.equal(s.distributions.worker_receive_to_scene_callback_ms.p50_ms,10);
+c.applied('session:1:2',{received_ms:120,forwarded_ms:122,received_wall_ms:1100},125,126,new Date(1099).toISOString());assert.equal(c.snapshot().same_stamp_messages,1);
+c.applied('session:2:0',{received_ms:130,forwarded_ms:132,received_wall_ms:1200},135,136,new Date(1199).toISOString());c.applied('session:2:1',{received_ms:140,forwarded_ms:142,received_wall_ms:1300},145,146,new Date(1299).toISOString());assert.equal(c.snapshot().superseded_before_scene,1);
+c.frame(150,false);c.frame(200,true);assert.equal(c.snapshot().distributions.scene_callback_interval_ms,undefined);
+c.frame(300,false);c.applied('hidden:3:2',{received_ms:400,forwarded_ms:402,received_wall_ms:1400},405,406,new Date(1399).toISOString());const before=c.snapshot().distributions.worker_receive_to_scene_callback_ms.sample_count;c.frame(1000,true);assert.equal(c.snapshot().distributions.worker_receive_to_scene_callback_ms.sample_count,before);
+c.reset();assert.deepEqual(c.snapshot().distributions,{});console.log('Bounded runtime diagnostics, opt-in, skew rejection, reset/visibility and correlated timestamps verified');

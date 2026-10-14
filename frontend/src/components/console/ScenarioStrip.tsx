@@ -8,18 +8,20 @@ import type { ScenarioSummary } from '../../types/protocol';
 import { EventTimeline } from './EventTimeline';
 
 /* The bottom strip (ADR-002 item 7): scenario state · transport · quick
- * scenario pick · destination. One mono row, DDS tokens only — folds in
- * the old ScenarioControlRoom + DestinationInput. */
+ * scenario pick · destination. One mono row, DDS tokens only. */
 
 const FALLBACK: { id: string; name: string }[] = [
   { id: 'normal_cruising', name: 'Normal Cruising' },
   { id: 'traffic_overtake', name: 'Traffic Overtake' },
   { id: 'emergency_cut_in', name: 'Cut-In & Brake' },
   { id: 'queue_stop_and_go', name: 'Stop & Go Queue' },
+  { id: 'erratic_cut_in', name: 'Erratic Cut-in' },
+  { id: 'highway_merge', name: 'Highway Merge' },
+  { id: 'lane_straddler', name: 'Lane Straddler' },
+  { id: 'low_friction_curve', name: 'Low Friction' },
 ];
 
-// US-101 / I-280 Peninsula freeway waypoints — OSRM keeps the route on the
-// highway (long straights, gentle sweepers, no city junctions).
+// US-101 / I-280 Peninsula freeway waypoints
 const DESTINATIONS: { label: string; lat: number; lng: number }[] = [
   { label: '101 · Burlingame', lat: 37.585, lng: -122.352 },
   { label: '101 · Redwood City', lat: 37.4849, lng: -122.228 },
@@ -32,8 +34,8 @@ const pill: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  padding: '6px 13px',
-  fontSize: 11.5,
+  padding: '5px 11px',
+  fontSize: 11,
   fontWeight: 600,
   fontFamily: 'var(--font-sans)',
   color: 'var(--text-muted)',
@@ -51,8 +53,8 @@ const iconBtn: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  width: 32,
-  height: 32,
+  width: 30,
+  height: 30,
   color: 'var(--text-primary)',
   background: 'var(--bg-card)',
   border: '1px solid var(--border-subtle)',
@@ -63,6 +65,8 @@ const iconBtn: React.CSSProperties = {
 
 export function ScenarioStrip() {
   const scenario = useSimulationStore((s) => s.scenario);
+  const commandResult = useSimulationStore((s) => s.commandResult);
+  const isConnected = useSimulationStore((s) => s.isConnected);
   const scenariosList = useSimulationStore((s) => s.scenariosList);
   const setScenariosList = useSimulationStore((s) => s.setScenariosList);
   const loadScenario = useSimulationStore((s) => s.loadScenario);
@@ -72,7 +76,6 @@ export function ScenarioStrip() {
   const sendCommand = useSimulationStore((s) => s.sendCommand);
 
   const hasEvents = useEvents((s) => s.events.length > 0);
-  const [dest, setDest] = useState<string | null>(null);
 
   useEffect(() => {
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -113,16 +116,17 @@ export function ScenarioStrip() {
   const cards = scenariosList?.length
     ? scenariosList.map((s) => ({ id: s.id, name: s.name }))
     : FALLBACK;
-  const activeId = scenario?.id ?? 'normal_cruising';
+  const activeId = isConnected ? scenario?.id : null;
   const paused = scenario?.is_paused ?? false;
 
   const activePill = (on: boolean): React.CSSProperties =>
     on
       ? {
-          color: '#fff',
+          color: '#ffffff',
           background: 'linear-gradient(135deg, rgba(0,242,254,0.28), rgba(56,189,248,0.16))',
-          borderColor: 'var(--brand)',
-          boxShadow: '0 0 14px rgba(0,242,254,0.32)',
+          border: '1px solid var(--brand)',
+          boxShadow: '0 0 12px rgba(0,242,254,0.3)',
+          fontWeight: 700,
         }
       : {};
 
@@ -132,98 +136,132 @@ export function ScenarioStrip() {
         height: '100%',
         display: 'flex',
         alignItems: 'center',
-        gap: 'var(--space-4)',
-        padding: '0 var(--space-4)',
+        justifyContent: 'space-between',
+        gap: 'var(--space-3)',
+        padding: '0 var(--space-3)',
       }}
     >
-      {/* scenario tag + running dot */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
-        <span
-          aria-hidden
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: '50%',
-            background: paused ? 'var(--warning)' : 'var(--success)',
-            boxShadow: `0 0 8px ${paused ? 'var(--warning)' : 'var(--success)'}`,
-            animation: paused ? undefined : 'dds-beacon 1.8s infinite ease-in-out',
-          }}
-        />
-        <span
-          style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: 11,
-            fontWeight: 800,
-            letterSpacing: '0.1em',
-            color: 'var(--text-faint)',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          🎬 SCENARIO
-        </span>
-      </div>
+      {/* 1. SCENARIO BADGE & SELECTOR PILLS */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 'none' }}>
+          <span
+            aria-hidden
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: paused ? 'var(--warning)' : 'var(--success)',
+              boxShadow: `0 0 8px ${paused ? 'var(--warning)' : 'var(--success)'}`,
+              animation: paused ? undefined : 'dds-beacon 1.8s infinite ease-in-out',
+            }}
+          />
+          <span
+            style={{
+              fontFamily: 'var(--font-display)',
+              fontSize: 10.5,
+              fontWeight: 800,
+              letterSpacing: '0.08em',
+              color: 'var(--text-faint)',
+              textTransform: 'uppercase',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            SCENARIO
+          </span>
+        </div>
 
-      {/* scenario pills — scrollable */}
-      <div
-        style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, overflowX: 'auto', scrollbarWidth: 'none' }}
-      >
-        {cards.map((c) => {
-          const on = c.id === activeId;
-          return (
-            <button key={c.id} style={{ ...pill, ...activePill(on) }} onClick={() => loadScenario(c.id)}>
-              {c.name}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* latest operational event */}
-      {hasEvents ? (
-        <EventTimeline variant="ticker" />
-      ) : scenario?.milestone ? (
-        <span
+        {/* Scrollable scenario pills */}
+        <div
           style={{
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--brand)',
-            fontSize: 10,
-            maxWidth: 220,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            flex: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            overflowX: 'auto',
+            scrollbarWidth: 'none',
+            paddingRight: 4,
           }}
         >
-          ◆ {scenario.milestone}
-        </span>
-      ) : null}
+          {cards.map((c) => {
+            const on = c.id === activeId;
+            return (
+              <button key={c.id} style={{ ...pill, ...activePill(on) }} onClick={() => loadScenario(c.id)}>
+                {c.name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-      <span style={{ width: 1, height: 26, background: 'var(--border-subtle)', flex: 'none' }} />
+      {/* 2. OPERATIONAL EVENT TICKER */}
+      <div style={{ display: 'flex', alignItems: 'center', flex: 'none', maxWidth: 280 }}>
+        {commandResult ? (
+          <span role="status" aria-live="polite" title={commandResult.message ?? undefined}
+            style={{fontSize:10,color:commandResult.status === 'rejected' ? 'var(--critical)' : 'var(--text-muted)'}}>
+            Command: {commandResult.status}{commandResult.message ? ` · ${commandResult.message}` : ''}
+          </span>
+        ) : hasEvents ? (
+          <EventTimeline variant="ticker" />
+        ) : scenario?.milestone ? (
+          <span
+            style={{
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--brand)',
+              fontSize: 10,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            ◆ {scenario.milestone}
+          </span>
+        ) : null}
+      </div>
 
-      {/* playback */}
-      <div style={{ display: 'flex', gap: 6, flex: 'none' }}>
-        <button style={iconBtn} onClick={togglePause} aria-label={paused ? 'Resume' : 'Pause'} title={paused ? 'Resume' : 'Pause'}>
-          {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+      <span style={{ width: 1, height: 22, background: 'var(--border-subtle)', flex: 'none' }} />
+
+      {/* 3. SIMULATION PLAYBACK CONTROLS */}
+      <div style={{ display: 'flex', gap: 5, flex: 'none' }}>
+        <button
+          style={iconBtn}
+          onClick={togglePause}
+          aria-label={paused ? 'Resume simulation' : 'Pause simulation'}
+          title={paused ? 'Resume (Space)' : 'Pause (Space)'}
+        >
+          {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
         </button>
-        <button style={iconBtn} onClick={stepSimulation} aria-label="Step one tick" title="Step +1 tick">
-          <StepForward className="h-4 w-4" />
+        <button
+          style={iconBtn}
+          onClick={stepSimulation}
+          aria-label="Step simulation one tick"
+          title="Step +1 tick"
+        >
+          <StepForward className="h-3.5 w-3.5" />
         </button>
-        <button style={iconBtn} onClick={resetSimulation} aria-label="Reset scenario" title="Reset">
-          <RotateCcw className="h-4 w-4" />
+        <button
+          style={iconBtn}
+          onClick={resetSimulation}
+          aria-label="Reset scenario"
+          title="Reset scenario"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      <span style={{ width: 1, height: 26, background: 'var(--border-subtle)', flex: 'none' }} />
+      <span style={{ width: 1, height: 22, background: 'var(--border-subtle)', flex: 'none' }} />
 
-      {/* destination */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 'none' }}>
+      {/* 4. HIGHWAY DESTINATION PRESETS */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flex: 'none' }}>
         <MapPin className="h-3.5 w-3.5" style={{ color: 'var(--brand)' }} aria-hidden />
         {DESTINATIONS.map((d) => (
           <button
             key={d.label}
-            style={{ ...pill, ...(dest === d.label ? { color: 'var(--brand)', borderColor: 'var(--brand-dim)' } : {}) }}
+            style={{
+              ...pill,
+              padding: '4px 9px',
+              fontSize: 10.5,
+            }}
             onClick={() => {
               sendCommand({ type: 'set_destination', lat: d.lat, lng: d.lng });
-              setDest(d.label);
             }}
           >
             {d.label}

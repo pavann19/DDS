@@ -8,9 +8,9 @@ const inter = Inter({ subsets: ["latin"], weight: ["300", "400", "500", "600", "
 const jetbrains = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-jetbrains", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "DDS — Driving Decision System",
+  title: "DDS Drive",
   description:
-    "Operator console for the DDS autonomous-driving simulation: live World/Driver telemetry, perception, prediction, and safety-shield state.",
+    "A clear view of your drive. Vehicle information, navigation, surroundings and safety status in one driving cockpit.",
 };
 
 export default function RootLayout({
@@ -19,10 +19,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`dark ${outfit.variable} ${inter.variable} ${jetbrains.variable}`}>
+    <html lang="en" className={`${outfit.variable} ${inter.variable} ${jetbrains.variable}`}>
       <body className="font-sans antialiased bg-background text-foreground">
         <CommandPalette />
-        <main className="h-screen overflow-hidden">{children}</main>
+        <div className="h-screen overflow-hidden">{children}</div>
       </body>
     </html>
   );

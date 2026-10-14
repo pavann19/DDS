@@ -1,0 +1,8 @@
+{
+  "name": "dds-next-glob-compat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The globSync API used by Next.js ESLint, without the unpatched braces dependency",
+  "main": "index.cjs",
+  "dependencies": { "tinyglobby": "0.2.17" }
+}

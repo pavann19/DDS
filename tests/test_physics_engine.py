@@ -3,8 +3,10 @@ Unit tests for app/services/physics_engine.py, including a
 regression test for the idle-coolant-runaway fix.
 """
 import time
+import math
 import pytest
 from app.services.physics_engine import PhysicsEngine
+from app.services.traffic import EGO_LANE_OFFSET_M
 
 
 def _tick(engine, action, dt, ticks):
@@ -219,12 +221,25 @@ def test_get_navigation_state_returns_expected_keys():
 # ---------------------------------------------------------------------------
 
 def _corner_route():
-    """~120 m east, then a ~90 degree left turn and ~150 m north, with
-    realistically dense waypoints (matching real OSRM route density)."""
-    route = [(37.7749, -122.4194 + i * 0.0001) for i in range(15)]
-    turn_lng = route[-1][1]
-    route += [(37.7749 + i * 0.0001, turn_lng) for i in range(1, 15)]
-    return route
+    """~120 m east, a ~90 deg left turn taken over a ~14 m radius arc (a
+    tight real urban-intersection corner -- OSRM emits a turn as an arc of
+    several points, not a single 90 deg vertex, and the ingest spline
+    rounds it further), then ~150 m north. Dense ~9 m waypoint spacing."""
+    lat0, lng0 = 37.7749, -122.4194
+    m_lat = 111_320.0
+    m_lng = 111_320.0 * math.cos(math.radians(lat0))
+    pts = [(lat0, lng0 + i * 0.0001) for i in range(15)]  # ~120 m east
+    x0 = 14 * (0.0001 * m_lng)                             # local east metres at corner
+    R = 14.0
+    ang, d_ang = 0.0, 3.5 / R
+    while ang < math.pi / 2:
+        ang += d_ang
+        ex = x0 + R * math.sin(ang)
+        ny = R * (1.0 - math.cos(ang))
+        pts.append((lat0 + ny / m_lat, lng0 + ex / m_lng))
+    lat_n, lng_n = pts[-1]
+    pts += [(lat_n + i * 0.0001, lng_n) for i in range(1, 15)]  # ~150 m north
+    return pts
 
 
 def _straight_route(n=100):
@@ -259,9 +274,12 @@ def test_jerk_stays_within_limit():
     """The defining fix of : bounded d(acceleration)/dt makes velocity C1
     continuous, which is what removes the visual flicker."""
     dt = 0.1
-    engine = PhysicsEngine()
+    engine = PhysicsEngine(seed=42)
     engine.set_destination(*_corner_route()[-1])
     engine.set_route(_corner_route())
+    # Comfort jerk is a no-collision contract. Emergency authority is tested
+    # separately; randomly spawned traffic may correctly demand a jerk bypass.
+    engine.traffic = None
     _, accels, _ = _drive(engine, "Accelerate", ticks=400, dt=dt)
     jerks = [abs(accels[i] - accels[i - 1]) / dt for i in range(1, len(accels))]
     # 1% tolerance: the engine derives its own dt from the wall clock, which is
@@ -350,7 +368,7 @@ def test_arrival_is_latched_so_the_car_does_not_orbit_the_destination():
 
 def test_setting_a_new_destination_rearms_after_arrival():
     route = _corner_route()
-    engine = PhysicsEngine()
+    engine = PhysicsEngine(seed=1)  # deterministic traffic -- this test is about destination re-arm
     engine.set_destination(*route[-1])
     engine.set_route(route)
     _drive(engine, "Accelerate", ticks=600)
@@ -712,10 +730,13 @@ def test_safety_shield_road_boundary_override_does_not_livelock_the_car():
     Drive the car off the modelled road directly and confirm it recovers
     (lateral offset shrinks back toward the road) instead of freezing."""
     dt = 0.1
-    engine = PhysicsEngine()
+    engine = PhysicsEngine(seed=42)
     route = _straight_route(n=150)
     engine.set_destination(*route[-1])
     engine.set_route(route)
+    # Isolate road-boundary recovery from unrelated random actor overlap.
+    # Collision emergency braking is covered by the preceding regression.
+    engine.traffic = None
     _drive(engine, "Accelerate", ticks=50)
 
     # Force the car's REAL position off the modelled road (not just the
@@ -775,3 +796,836 @@ def test_no_route_bicycle_steering_falls_back_to_proportional_heading_control():
     assert engine.speed_kmh > 0.0
     assert engine.frenet_frame is None
     assert engine.current_lateral_offset_m == 0.0
+
+
+def test_kinematic_bicycle_sideslip_formula():
+    """Kinematic sideslip beta = atan((lr/L) * tan(delta)) with lr = L/2."""
+    engine = PhysicsEngine()
+    engine.steering_angle_rad = math.radians(15.0)
+    # Trigger update with small dt
+    engine.last_update_time = time.time() - 0.05
+    engine.update("Maintain Speed", dt=0.05)
+
+    expected_beta = math.atan(0.5 * math.tan(engine.steering_angle_rad))
+    assert engine.kinematic_sideslip_rad == pytest.approx(expected_beta, abs=1e-3)
+    nav = engine.get_navigation_state()
+    assert nav["kinematic_sideslip_rad"] == pytest.approx(expected_beta, abs=1e-3)
+
+
+def test_steering_and_yaw_rate_physical_bounds():
+    """Steering angle, yaw rate, and lateral acceleration must stay strictly within physical passenger bounds."""
+    route = _corner_route()
+    engine = PhysicsEngine()
+    engine.set_destination(*route[-1])
+    engine.set_route(route)
+
+    max_steer = 0.0
+    max_yaw_rate = 0.0
+    max_lat_accel = 0.0
+
+    for _ in range(250):
+        engine.last_update_time = time.time() - 0.05
+        engine.update("Accelerate", dt=0.05)
+        max_steer = max(max_steer, abs(engine.steering_angle_rad))
+        max_yaw_rate = max(max_yaw_rate, abs(engine.yaw_rate_degps))
+        max_lat_accel = max(max_lat_accel, engine.lateral_accel_mps2)
+
+    # Max steer must never exceed 35 deg (0.61 rad)
+    assert max_steer <= PhysicsEngine.MAX_STEER_RAD + 1e-4
+    # Max yaw rate must stay within comfortable cornering bounds (< 90 deg/s)
+    assert max_yaw_rate < 90.0, f"Yaw rate exceeded bound: {max_yaw_rate} deg/s"
+    # Lateral acceleration must be bounded
+    assert max_lat_accel <= PhysicsEngine.A_LAT_MAX_MPS2 + 1.5, f"Lateral accel exceeded: {max_lat_accel}"
+
+
+def test_authoritative_navigation_state_fields():
+    """Authoritative physical fields are exposed in get_navigation_state for frontend rendering."""
+    route = _straight_route(n=50)
+    engine = PhysicsEngine()
+    engine.set_destination(*route[-1])
+    engine.set_route(route)
+    _drive(engine, "Accelerate", ticks=10)
+
+    nav = engine.get_navigation_state()
+    required_keys = [
+        "station_m", "lateral_offset_m", "lateral_target_m",
+        "heading_deg", "road_heading_deg", "relative_heading_deg", "world_heading_deg",
+        "steering_angle_rad", "kinematic_sideslip_rad",
+        "lateral_accel_mps2", "signed_lateral_accel_mps2", "yaw_rate_degps",
+        "world_pos_x", "world_pos_z"
+    ]
+    for key in required_keys:
+        assert key in nav, f"Key '{key}' missing from get_navigation_state"
+
+    # World heading must match road heading + relative heading (mod 360)
+    expected_world_heading = (nav["road_heading_deg"] + nav["relative_heading_deg"] + 360.0) % 360.0
+    assert nav["world_heading_deg"] == pytest.approx(expected_world_heading, abs=0.1)
+
+
+def test_friction_derating_reduces_cornering_speed():
+    """Reduced road friction (wet surface mu = 0.5) reduces cornering speed cap."""
+    route = _corner_route()
+    engine_dry = PhysicsEngine()
+    engine_dry.set_destination(*route[-1])
+    engine_dry.set_route(route)
+    engine_dry.friction_mu = 1.0
+
+    engine_wet = PhysicsEngine()
+    engine_wet.set_destination(*route[-1])
+    engine_wet.set_route(route)
+    engine_wet.friction_mu = 0.5
+
+    # Drive both until they encounter curvature
+    for _ in range(80):
+        engine_dry.last_update_time = time.time() - 0.05
+        engine_dry.update("Accelerate", dt=0.05)
+        engine_wet.last_update_time = time.time() - 0.05
+        engine_wet.update("Accelerate", dt=0.05)
+
+    # Wet surface must limit cornering speed lower than dry surface
+    if engine_dry.path_curvature > 1e-4:
+        dry_cap = math.sqrt(PhysicsEngine.A_LAT_MAX_MPS2 / engine_dry.path_curvature)
+        wet_cap = math.sqrt((PhysicsEngine.A_LAT_MAX_MPS2 * 0.5) / engine_wet.path_curvature)
+        assert wet_cap < dry_cap
+
+
+
+# ---------------------------------------------------------------------------
+# P0 (A1): low-friction proof at the control level. A wet surface must (a)
+# make "low_friction_curvature" the binding speed constraint on a curve and
+# (b) physically hold both the cornering speed and the realised lateral
+# acceleration below the dry-surface values -- not just relabel a variable.
+# ---------------------------------------------------------------------------
+def _gentle_arc_route():
+    """~120 m straight lead-in, then a smooth ~90 deg left arc of radius
+    ~60 m (well above the 8 km/h corner-speed floor so friction has room to
+    create a measurable apex-speed separation), then a straight run-out."""
+    lat0, lng0 = 37.7749, -122.4194
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lng = 111_320.0 * math.cos(math.radians(lat0))
+    pts = []
+    # straight lead-in heading east, 120 m in 3 m steps
+    for i in range(40):
+        pts.append((lat0, lng0 + (i * 3.0) / m_per_deg_lng))
+    lat, lng = pts[-1]
+    # smooth left arc, radius 60 m, heading east -> north, 3 m arc steps
+    R = 60.0
+    cx_lat = lat + R / m_per_deg_lat          # centre is due north of arc start
+    cx_lng = lng
+    ang = -math.pi / 2                         # start angle (arc start is south of centre)
+    d_ang = 3.0 / R
+    while ang < 0.0:
+        ang += d_ang
+        pts.append((cx_lat + (R * math.sin(ang)) / m_per_deg_lat,
+                    cx_lng + (R * (1 - math.cos(ang))) / m_per_deg_lng))
+    lat, lng = pts[-1]
+    for i in range(1, 40):
+        pts.append((lat + (i * 3.0) / m_per_deg_lat, lng))
+    return pts
+
+
+def test_low_friction_scales_the_grip_steer_limit():
+    """Wet / icy grip must tighten the speed-dependent steering limit:
+    delta_max(v, mu) = min(MAX_STEER_RAD, atan(mu * A_LAT_MAX * L / v^2)).
+    This mirrors physics_engine's grip_steer_limit branch and locks the
+    contract that friction constrains *control*, not just a speed label."""
+    L = PhysicsEngine.WHEELBASE_M
+    a_lat = PhysicsEngine.A_LAT_MAX_MPS2
+    v = 16.0  # m/s -- fast enough that grip, not the geometric cap, binds
+    limits = {}
+    for mu in (1.0, 0.5, 0.2):
+        expected = min(PhysicsEngine.MAX_STEER_RAD, math.atan(mu * a_lat * L / (v * v)))
+        limits[mu] = expected
+    # strictly monotone: less grip -> smaller allowed steer angle
+    assert limits[1.0] > limits[0.5] > limits[0.2]
+    # and at this speed all three are the grip branch, not the geometric clamp
+    assert limits[1.0] < PhysicsEngine.MAX_STEER_RAD
+
+
+def _arc_route_for_friction(R=60.0, lead=40, runout=30):
+    """Straight ~120 m east lead-in, a constant-radius left arc whose initial
+    tangent is continuous with the lead-in (east), then a straight north
+    run-out. Dense 3 m raw spacing (smooth_route resamples to ~5 m).
+    NOTE: set_destination() MUST be called before set_route() -- set_destination()
+    clears the route."""
+    lat0, lng0 = 37.7749, -122.4194
+    m_lat = 111_320.0
+    m_lng = 111_320.0 * math.cos(math.radians(lat0))
+    pts = [(lat0, lng0 + (i * 3.0) / m_lng) for i in range(lead)]
+    x0 = lead * 3.0                      # local east metres at arc start
+    d_ang = 3.0 / R
+    ang = 0.0
+    while ang < math.pi / 2:             # sweep 0 -> 90 deg, tangent east -> north
+        ang += d_ang
+        east_m = x0 + R * math.sin(ang)
+        north_m = R * (1.0 - math.cos(ang))
+        pts.append((lat0 + north_m / m_lat, lng0 + east_m / m_lng))
+    lat_n, lng_n = pts[-1]
+    pts += [(lat_n + (i * 3.0) / m_lat, lng_n) for i in range(1, runout)]
+    return pts
+
+
+def test_low_friction_records_a_speed_derate_fact_on_a_curve():
+    """Deterministic (seeded, fixed dt): on the SAME arc, mu=0.5 must make
+    the engine record friction_speed_derate_active with a positive
+    friction_derate_kmh and surface 'low_friction_curvature' as a binding
+    reason; mu=1.0 must do neither. This proves the friction de-rate lowers
+    the cornering speed cap in fact, independent of which cap ultimately
+    wins speed_limit_reason (tracking_correction routinely overwrites it).
+    """
+    route = _arc_route_for_friction()
+
+    def run(mu):
+        eng = PhysicsEngine(seed=5)
+        eng.set_destination(*route[-1])   # before set_route -- required
+        eng.set_route(route)
+        eng.reset_state(station_m=0.0, speed_kmh=52.0, lateral_offset_m=1.75)
+        eng.friction_mu = mu
+        derate_active = False
+        peak_derate = 0.0
+        reasons = set()
+        for _ in range(150):
+            eng.update("Maintain Speed", dt=0.1)
+            reasons.add(eng.speed_limit_reason)
+            if eng.friction_speed_derate_active:
+                derate_active = True
+                peak_derate = max(peak_derate, eng.friction_derate_kmh)
+        return derate_active, peak_derate, reasons
+
+    dry_active, dry_peak, dry_reasons = run(1.0)
+    wet_active, wet_peak, wet_reasons = run(0.5)
+
+    assert wet_active and wet_peak > 0.0, "wet surface did not record a friction speed de-rate"
+    assert "low_friction_curvature" in wet_reasons
+    assert not dry_active, "dry surface must never record a friction de-rate"
+    assert "low_friction_curvature" not in dry_reasons
+    assert "lateral_accel_limit" in dry_reasons  # dry is curvature-limited, not friction-limited
+
+
+def test_navigation_state_exposes_friction_derate_fact():
+    route = _arc_route_for_friction()
+    eng = PhysicsEngine(seed=5)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=52.0, lateral_offset_m=1.75)
+    eng.friction_mu = 0.5
+    for _ in range(150):
+        eng.update("Maintain Speed", dt=0.1)
+    nav = eng.get_navigation_state()
+    for k in ("friction_mu", "friction_speed_derate_active", "friction_derate_kmh"):
+        assert k in nav, f"{k} missing from get_navigation_state"
+    assert nav["friction_mu"] == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Cornering-loop determinism.
+#
+# Regression: driving a fixed curved route through its low-speed apex used to
+# give materially different speed/trajectory traces run-to-run *within one
+# process* -- apex speed after tick 40 varied ~0.0..7.9 km/h across identical
+# in-process trials. Root cause: set_route() spawned its per-route
+# TrafficModel with seed=None (OS entropy), so NPC start stations/speeds --
+# and hence the forward sensor + IDM longitudinal control -- differed every
+# run. Near a curve's stall point that is the difference between the ego
+# braking to a standstill and rolling through. Straight-line / short-window
+# regimes only looked deterministic because no randomly-placed NPC had come
+# within sensing range yet. Fix: PhysicsEngine(seed=...) now threads that
+# seed into TrafficModel, making (route, dt, seed) bit-reproducible.
+# ---------------------------------------------------------------------------
+def test_cornering_loop_is_bit_reproducible_for_a_fixed_route_dt_seed():
+    route = _gentle_arc_route()
+
+    def drive():
+        eng = PhysicsEngine(seed=20260909)
+        eng.set_destination(*route[-1])
+        eng.set_route(route)
+        speeds, positions = [], []
+        # Well past the ~230-tick deterministic-only window and deep into the
+        # low-speed apex regime that was previously unstable.
+        for _ in range(260):
+            eng.update("Accelerate", dt=0.05)
+            speeds.append(eng.speed_kmh)
+            positions.append((eng.lat, eng.lng))
+        return speeds, positions
+
+    speeds_a, pos_a = drive()
+    speeds_b, pos_b = drive()
+
+    # Bit-for-bit identical: same seed, same route, same dt -> same drive.
+    assert speeds_a == speeds_b
+    assert pos_a == pos_b
+
+    # And the trace is a real drive through the bend -- the car reaches
+    # cruise on the lead-in and measurably slows for the arc (this is the
+    # regime that was previously unstable), not a degenerate flat/zero trace.
+    apex = min(speeds_a[40:])
+    assert max(speeds_a) > 20.0
+    assert apex < max(speeds_a) - 5.0
+
+
+def test_unseeded_engine_still_defaults_to_os_seeded_traffic():
+    """The determinism fix must not change behaviour for callers that pass no
+    seed: TrafficModel is still created, just with seed=None as before."""
+    route = _straight_route()
+    eng = PhysicsEngine()
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    assert eng.traffic is not None
+    assert eng.traffic.seed is None
+
+
+# ---------------------------------------------------------------------------
+# P-CURV regression: a single polyline vertex that reverses direction (a
+# hairpin artefact, or a spot the spline smoother failed to round) must NOT
+# be read as a ~1.7 m-radius corner that floors the car to the crawl speed.
+# path_curvature is now a sliding-window estimate with per-step artefact
+# rejection and a physical MIN_TURN_RADIUS_M ceiling.
+# ---------------------------------------------------------------------------
+def _route_with_reversal_artifact():
+    """~90 m straight east, one bad vertex that jumps back west ~6 m (a
+    ~175 deg reversal in a single step), then continues east again."""
+    lat0, lng0 = 37.7749, -122.4194
+    m_lng = 111_320.0 * math.cos(math.radians(lat0))
+    pts = [(lat0, lng0 + (i * 3.0) / m_lng) for i in range(30)]
+    # inject the artefact: one point that steps backwards, then resume
+    x_back = 29 * 3.0 - 6.0
+    pts.append((lat0, lng0 + x_back / m_lng))
+    pts += [(lat0, lng0 + (30 * 3.0 + i * 3.0) / m_lng) for i in range(1, 30)]
+    return pts
+
+
+def test_direction_reversal_vertex_does_not_produce_a_phantom_hairpin():
+    route = _route_with_reversal_artifact()
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=50.0, lateral_offset_m=1.75)
+
+    peak_k = 0.0
+    min_speed = 1e9
+    for _ in range(200):
+        eng.update("Accelerate", dt=0.05)
+        peak_k = max(peak_k, eng.path_curvature)
+        if eng.current_station_m > 5.0:
+            min_speed = min(min_speed, eng.speed_kmh)
+
+    # curvature must stay within the physical ceiling (R >= 8 m -> kappa <= 0.125)
+    assert peak_k <= 0.125 + 1e-9, f"phantom curvature {peak_k:.3f} 1/m from a route artefact"
+    # and the essentially-straight route must not have braked the car to a crawl
+    assert min_speed > 25.0, f"artefact vertex floored the car to {min_speed:.1f} km/h"
+
+
+def test_smooth_arc_curvature_matches_true_radius():
+    """A clean constant-radius arc must report path_curvature ~= 1/R, not a
+    resampling-noise spike."""
+    for R in (60.0, 120.0, 250.0):
+        route = _arc_route_for_friction(R=R)
+        eng = PhysicsEngine(seed=1)
+        eng.set_destination(*route[-1])
+        eng.set_route(route)
+        eng.reset_state(station_m=0.0, speed_kmh=45.0, lateral_offset_m=1.75)
+        peak_k = 0.0
+        for _ in range(400):
+            eng.update("Accelerate", dt=0.05)
+            peak_k = max(peak_k, eng.path_curvature)
+        expected = 1.0 / R
+        assert abs(peak_k - expected) <= 0.35 * expected, (
+            f"R={R}: path_curvature {peak_k:.4f} not within 35% of 1/R {expected:.4f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# P-CORNER: with the curvature-spike fixed and the proactive cut-in response
+# bounded to an ease-off (not an emergency stop), the ego must negotiate a
+# range of realistic constant-radius curves while holding its lane -- i.e.
+# lateral offset stays well inside the 7 m modelled road, no Safety-Shield
+# overrides, and it never stalls to a standstill mid-drive.
+# ---------------------------------------------------------------------------
+def test_ego_holds_lane_through_realistic_curves():
+    for R in (80.0, 150.0, 300.0):
+        route = _arc_route_for_friction(R=R, runout=60)
+        eng = PhysicsEngine(seed=1)
+        eng.set_destination(*route[-1])
+        eng.set_route(route)
+        eng.reset_state(station_m=0.0, speed_kmh=40.0, lateral_offset_m=1.75)
+        total = eng.station_distances[-1]
+
+        max_off = 0.0
+        shield_ticks = 0
+        mid_min_speed = 1e9
+        for _ in range(700):
+            eng.update("Maintain Speed", dt=0.1)
+            max_off = max(max_off, abs(eng.current_lateral_offset_m))
+            if not eng.shield_verdict.approved:
+                shield_ticks += 1
+            if 15.0 < eng.current_station_m < total - 55.0:
+                mid_min_speed = min(mid_min_speed, eng.speed_kmh)
+
+        assert max_off < 4.0, f"R={R}: ego strayed {max_off:.1f} m from lane centre (road half-width 7 m)"
+        assert shield_ticks == 0, f"R={R}: Safety Shield overrode {shield_ticks} ticks negotiating a benign curve"
+        assert mid_min_speed > 12.0, f"R={R}: ego stalled to {mid_min_speed:.1f} km/h mid-curve"
+
+
+def test_proactive_cut_in_response_is_bounded_to_an_ease_off():
+    """A proactive cut-in slowdown may not pull the ego below
+    max(0.5*target, target - PROACTIVE_CUT_IN_MAX_DIP_KMH). This bounds the
+    cost of a sustained false-positive cut-in (the intent estimator is only
+    partially curve-robust) to an ease-off rather than a full stop."""
+    route = _arc_route_for_friction(R=150.0, runout=60)
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=40.0, lateral_offset_m=1.75)
+    total = eng.station_distances[-1]
+
+    saw_proactive = False
+    min_speed_while_proactive = 1e9
+    for _ in range(700):
+        eng.update("Maintain Speed", dt=0.1)
+        if eng.speed_limit_reason == "predictive_cut_in" and eng.current_station_m < total - 55.0:
+            saw_proactive = True
+            min_speed_while_proactive = min(min_speed_while_proactive, eng.speed_kmh)
+
+    if saw_proactive:
+        # target is 50 km/h cruise; floor is max(25, 50-20)=30 -> allow a small
+        # undershoot for the jerk-limited approach to the floor
+        assert min_speed_while_proactive > 22.0, (
+            f"proactive cut-in pulled the ego to {min_speed_while_proactive:.1f} km/h -- not an ease-off"
+        )
+
+
+# ---------------------------------------------------------------------------
+# P0.1 physics-semantics audit: independent checks against ANALYTICALLY known
+# route geometry (not the world_h == road_h + rel_h algebraic identity, which
+# is true by construction). Compass convention: heading in degrees, 0 = +lat
+# (north), 90 = +lng (east), measured atan2(dir_x, -dir_z).
+# ---------------------------------------------------------------------------
+def _bearing_route(bearing_deg, n=100, step_m=4.0):
+    """Straight route heading `bearing_deg` (compass: 0=N, 90=E)."""
+    lat0, lng0 = 37.7749, -122.4194
+    m_lat = 111_320.0
+    m_lng = 111_320.0 * math.cos(math.radians(lat0))
+    br = math.radians(bearing_deg)
+    north = math.cos(br) * step_m
+    east = math.sin(br) * step_m
+    return [(lat0 + (i * north) / m_lat, lng0 + (i * east) / m_lng) for i in range(n)]
+
+
+def test_road_heading_matches_known_route_bearing():
+    for bearing in (0.0, 45.0, 90.0, 135.0):
+        route = _bearing_route(bearing)
+        eng = PhysicsEngine(seed=1)
+        eng.set_destination(*route[-1])
+        eng.set_route(route)
+        eng.reset_state(station_m=0.0, speed_kmh=35.0, lateral_offset_m=1.75)
+        for _ in range(60):
+            eng.update("Maintain Speed", dt=0.1)
+        nav = eng.get_navigation_state()
+        got = nav["road_heading_deg"] % 360.0
+        want = bearing % 360.0
+        err = abs((got - want + 180.0) % 360.0 - 180.0)
+        assert err < 3.0, f"bearing {bearing}: road_heading {got:.1f} deg, expected {want:.1f}"
+        # a car tracking a straight road has ~zero heading relative to it
+        assert abs(nav["relative_heading_deg"]) < 3.0
+        # world heading is the vehicle heading and must equal the road's here
+        assert abs((nav["world_heading_deg"] - want + 180.0) % 360.0 - 180.0) < 4.0
+
+
+def test_yaw_rate_and_lateral_accel_match_v_over_R_on_a_steady_arc():
+    R = 150.0
+    route = _arc_route_for_friction(R=R, runout=60)
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=35.0, lateral_offset_m=1.75)
+
+    yaw_rates, lat_accels, speeds, n = [], [], [], 0
+    for _ in range(700):
+        eng.update("Maintain Speed", dt=0.1)
+        st = eng.current_station_m
+        if 160.0 < st < 300.0:  # solidly inside the constant-radius arc
+            v = eng.speed_kmh / 3.6
+            if v < 3.0:
+                continue
+            yaw_rates.append(abs(math.radians(eng.yaw_rate_degps)))
+            lat_accels.append(eng.lateral_accel_mps2)
+            speeds.append(v)
+            n += 1
+
+    assert n > 20, "not enough steady-arc samples"
+    v_mean = sum(speeds) / n
+    # The MEAN realised yaw rate / lateral accel over the steady arc must
+    # match v/R and v^2/R. (Instantaneous values are noisier now that the
+    # path tracker makes small per-tick corrections; the mean is the
+    # physically meaningful quantity. The ego tracks a lane offset ~1.75 m
+    # inside the centreline radius, so a few % bias is expected.)
+    mean_yaw = sum(yaw_rates) / n
+    mean_lat = sum(lat_accels) / n
+    assert abs(mean_yaw - v_mean / R) / (v_mean / R) < 0.15, (
+        f"mean yaw rate {mean_yaw:.4f} vs v/R {v_mean / R:.4f}"
+    )
+    assert abs(mean_lat - v_mean * v_mean / R) / (v_mean * v_mean / R) < 0.20, (
+        f"mean lateral accel {mean_lat:.3f} vs v^2/R {v_mean * v_mean / R:.3f}"
+    )
+
+
+def test_kinematic_sideslip_is_exactly_the_bicycle_formula_every_tick():
+    route = _arc_route_for_friction(R=120.0, runout=40)
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=35.0, lateral_offset_m=1.75)
+    for _ in range(400):
+        eng.update("Maintain Speed", dt=0.1)
+        expected = math.atan(0.5 * math.tan(eng.steering_angle_rad))
+        assert eng.kinematic_sideslip_rad == pytest.approx(expected, abs=1e-9)
+
+
+def test_road_heading_sweeps_through_a_left_arc():
+    """On a left arc from east to north, road_heading_deg must decrease
+    monotonically (90 -> 0), never jump, and stay within [-5, 95]."""
+    route = _arc_route_for_friction(R=150.0, runout=60)
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=35.0, lateral_offset_m=1.75)
+
+    headings = []
+    for _ in range(700):
+        eng.update("Maintain Speed", dt=0.1)
+        if 130.0 < eng.current_station_m < 330.0:
+            headings.append(eng.get_navigation_state()["road_heading_deg"])
+
+    assert len(headings) > 30
+    assert max(headings) < 95.0 and min(headings) > -5.0
+    # net sweep is a real left turn of tens of degrees
+    assert headings[0] - headings[-1] > 30.0
+    # no single-step discontinuity (resampling / wrap glitch)
+    assert max(abs(a - b) for a, b in zip(headings, headings[1:])) < 8.0
+
+
+# ---------------------------------------------------------------------------
+# P0.2 authoritative pose: the backend's emitted world_pos must be
+# self-consistent with its own emitted (lat, lng) under the SAME
+# equirectangular projection + first-waypoint origin that the frontend's
+# toLocalXZ uses. This locks the frame contract the 3D renderer now relies
+# on when it consumes ego.world_pos directly.
+# ---------------------------------------------------------------------------
+def test_world_pos_is_consistent_with_emitted_latlng():
+    from app.services.frenet import latlng_to_local
+
+    route = _arc_route_for_friction(R=150.0, runout=60)
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=35.0, lateral_offset_m=1.75)
+
+    origin_lat, origin_lng = route[0]
+    worst = 0.0
+    n = 0
+    for _ in range(500):
+        eng.update("Maintain Speed", dt=0.1)
+        nav = eng.get_navigation_state()
+        wp = nav["world_pos"]
+        # independent projection of the ego's own lat/lng
+        ex, ez = latlng_to_local(eng.lat, eng.lng, origin_lat, origin_lng)
+        d = math.hypot(wp["x"] - ex, wp["z"] - ez)
+        worst = max(worst, d)
+        n += 1
+    assert n > 100
+    # frenet_to_local_xz interpolates on the resampled polyline while
+    # (lat,lng) is the exact integrated pose -- a few tens of cm of
+    # smoothing/interpolation slack is expected, metres are not.
+    assert worst < 1.5, f"world_pos vs projected lat/lng diverged by {worst:.2f} m"
+
+
+def test_world_pos_and_frenet_pose_share_a_frame():
+    """world_pos (curved-route projection) and pose (frenet-as-cartesian,
+    x=d, z=-s) must agree on a STRAIGHT route -- proving they are the same
+    metric frame, not offset by an origin bug."""
+    route = _bearing_route(90.0, n=120, step_m=4.0)  # due east
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=35.0, lateral_offset_m=1.75)
+    for _ in range(120):
+        eng.update("Maintain Speed", dt=0.1)
+    nav = eng.get_navigation_state()
+    wp = nav["world_pos"]
+    # on a due-east straight route: world x ~= station, world z ~= -d
+    assert abs(wp["x"] - nav["station_m"]) < 2.0
+    assert abs(wp["z"] - (-nav["lateral_offset_m"])) < 2.0
+
+
+# ===========================================================================
+# STEP 1 (cornering) regression suite -- feed-forward + Stanley path tracker.
+# Known constant-radius geometry; the ego must hold its lane centre to well
+# under a lane's width, entering, through, and exiting the curve, both
+# directions, at realistic speeds. Diagnosed root cause: the old pure-pursuit
+# feedback law lagged a curve by ~Ld^2*kappa/4 (drifted / cut the corner)
+# then overshot on exit; replaced with delta_ff = atan(L*kappa) plus a
+# Stanley cross-track + heading feedback on the exactly-known Frenet state.
+# ===========================================================================
+from app.services.planner import ff_stanley_steer as _ff_stanley  # noqa: E402
+from app.services.frenet import (  # noqa: E402
+    signed_curvature_at as _sca,
+    build_frenet_frame as _bff,
+)
+
+_M_LAT = 111_320.0
+_M_LNG = 111_320.0 * math.cos(math.radians(37.7749))
+
+
+def _known_arc(R, sign=+1, lead_m=140.0, sweep_deg=90.0, runout_m=160.0, step_m=3.0):
+    """Straight east lead-in, constant-radius arc (sign=+1 left / -1 right,
+    tangent continuous), straight run-out."""
+    lat0, lng0 = 37.7749, -122.4194
+    pts = []
+    n_lead = int(lead_m / step_m)
+    for i in range(n_lead):
+        pts.append((lat0, lng0 + (i * step_m) / _M_LNG))
+    x0 = (n_lead - 1) * step_m
+    d_ang = step_m / R
+    ang = 0.0
+    end = math.radians(sweep_deg)
+    while ang < end:
+        ang += d_ang
+        ex = x0 + R * math.sin(ang)
+        ny = sign * R * (1.0 - math.cos(ang))
+        pts.append((lat0 + ny / _M_LAT, lng0 + ex / _M_LNG))
+    lat_n, lng_n = pts[-1]
+    for i in range(1, int(runout_m / step_m)):
+        pts.append((lat_n + sign * (i * step_m) / _M_LAT, lng_n))
+    return pts
+
+
+def _drive_arc_cte(R, sign, entry_kmh):
+    route = _known_arc(R, sign=sign)
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=entry_kmh, lateral_offset_m=EGO_LANE_OFFSET_M)
+    total = eng.station_distances[-1]
+    peak_cte = 0.0
+    straight_cte = 0.0
+    for _ in range(4000):
+        eng.update("Maintain Speed", dt=0.05)
+        st = eng.current_station_m
+        cte = abs(eng.current_lateral_offset_m - EGO_LANE_OFFSET_M)
+        if st < 120.0:
+            straight_cte = max(straight_cte, cte)
+        else:
+            peak_cte = max(peak_cte, cte)
+        if st > total - 25:
+            break
+    return straight_cte, peak_cte
+
+
+def test_cornering_left_arc_holds_lane_within_half_a_metre():
+    for R in (30.0, 50.0, 80.0, 150.0):
+        for entry in (40.0, 55.0):
+            straight_cte, peak_cte = _drive_arc_cte(R, +1, entry)
+            assert straight_cte < 0.05, (
+                f"left R={R} entry={entry}: strayed {straight_cte:.2f} m on the straight lead-in"
+            )
+            lim = 0.5 if R >= 40 else 0.7
+            assert peak_cte < lim, (
+                f"left R={R} entry={entry}: peak cross-track error {peak_cte:.2f} m through the curve"
+            )
+
+
+def test_cornering_right_arc_holds_lane_within_half_a_metre():
+    for R in (30.0, 50.0, 80.0, 150.0):
+        for entry in (40.0, 55.0):
+            straight_cte, peak_cte = _drive_arc_cte(R, -1, entry)
+            assert straight_cte < 0.05
+            lim = 0.5 if R >= 40 else 0.7
+            assert peak_cte < lim, (
+                f"right R={R} entry={entry}: peak cross-track error {peak_cte:.2f} m through the curve"
+            )
+
+
+def test_cornering_no_exit_overshoot_into_the_next_lane():
+    """The classic pure-pursuit failure was an inward overshoot on curve
+    exit. With FF+Stanley the settled error after the arc must be small."""
+    route = _known_arc(50.0, sign=+1, runout_m=200.0)
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=45.0, lateral_offset_m=EGO_LANE_OFFSET_M)
+    total = eng.station_distances[-1]
+    arc_end = 140.0 + 50.0 * math.pi / 2
+    settled = []
+    for _ in range(5000):
+        eng.update("Maintain Speed", dt=0.05)
+        st = eng.current_station_m
+        if st > arc_end + 60.0:
+            settled.append(abs(eng.current_lateral_offset_m - EGO_LANE_OFFSET_M))
+        if st > total - 25:
+            break
+    assert settled and max(settled) < 0.15, (
+        f"exit overshoot / oscillation: max settled CTE {max(settled):.2f} m"
+    )
+
+
+def test_ff_stanley_zero_when_straight_on_target_and_aligned():
+    d = _ff_stanley(
+        current_d_m=1.75, target_d_m=1.75,
+        ego_heading_deg=90.0, road_heading_deg=90.0,
+        road_curvature_signed_1pm=0.0, v_mps=12.0,
+        wheelbase_m=2.8, steer_limit_rad=0.6,
+    )
+    assert abs(d) < 1e-9
+
+
+def test_ff_stanley_feed_forward_is_the_kinematic_bicycle_angle():
+    for kappa in (-0.02, -0.005, 0.008, 0.02):
+        d = _ff_stanley(
+            current_d_m=1.75, target_d_m=1.75,
+            ego_heading_deg=90.0, road_heading_deg=90.0,
+            road_curvature_signed_1pm=kappa, v_mps=12.0,
+            wheelbase_m=2.8, steer_limit_rad=0.6,
+        )
+        assert d == pytest.approx(math.atan(2.8 * kappa), abs=1e-9)
+
+
+def test_ff_stanley_cross_track_sign_is_correct():
+    # d is +LEFT; a car LEFT of target (current > target) must steer RIGHT
+    # (positive steer turns the car toward -d).
+    left_of_target = _ff_stanley(
+        current_d_m=3.0, target_d_m=1.75,
+        ego_heading_deg=90.0, road_heading_deg=90.0,
+        road_curvature_signed_1pm=0.0, v_mps=12.0,
+        wheelbase_m=2.8, steer_limit_rad=0.6,
+    )
+    right_of_target = _ff_stanley(
+        current_d_m=0.5, target_d_m=1.75,
+        ego_heading_deg=90.0, road_heading_deg=90.0,
+        road_curvature_signed_1pm=0.0, v_mps=12.0,
+        wheelbase_m=2.8, steer_limit_rad=0.6,
+    )
+    assert left_of_target > 0.0
+    assert right_of_target < 0.0
+
+
+def test_ff_stanley_heading_error_sign_is_correct():
+    d = _ff_stanley(
+        current_d_m=1.75, target_d_m=1.75,
+        ego_heading_deg=95.0, road_heading_deg=90.0,
+        road_curvature_signed_1pm=0.0, v_mps=12.0,
+        wheelbase_m=2.8, steer_limit_rad=0.6,
+    )
+    assert d < 0.0
+
+
+def test_signed_curvature_at_matches_known_radius_and_sign():
+    fl = _bff(_known_arc(120.0, sign=+1))
+    fr = _bff(_known_arc(120.0, sign=-1))
+    kl = _sca(fl, 200.0)
+    kr = _sca(fr, 200.0)
+    assert kl < 0 and abs(abs(kl) - 1.0 / 120.0) < 0.25 / 120.0
+    assert kr > 0 and abs(abs(kr) - 1.0 / 120.0) < 0.25 / 120.0
+    assert abs(_sca(fl, 40.0)) < 1e-3
+
+
+# ===========================================================================
+# STEP 2 (collision awareness) regression suite. The ego used to keep moving
+# until ~half its body had entered a lead vehicle before slowing enough,
+# because (a) sense_lead_vehicle used a centre-to-centre station gap, not
+# bumper-to-bumper, and (b) it dropped the lead the instant the ego's lateral
+# offset drifted half a lane during a lane change, after which IDM stopped
+# applying and the ego ACCELERATED into the car it had been braking for.
+# Fix: the forward sensor is now a collision CORRIDOR (covers the lane the
+# ego is committing into) reporting a bumper-to-bumper gap; the Safety Shield
+# has a hard proximity floor.
+# ===========================================================================
+from app.services.traffic import (  # noqa: E402
+    TrafficModel as _TM,
+    NpcVehicle as _NPC,
+    ADJACENT_LANE_OFFSET_M as _ADJ,
+    VEHICLE_HALF_LENGTH_M as _HL,
+    VEHICLE_HALF_WIDTH_M as _HW,
+)
+
+
+def _straight_route_step2(n=400):
+    return [(37.7749 + i * 0.00005, -122.4194) for i in range(n)]
+
+
+def _min_body_clearance(eng, npcs):
+    """Minimum AABB-style body-to-body clearance ego<->any npc (negative = overlap)."""
+    worst = 1e9
+    for npc in npcs:
+        ds = abs(npc.station_m - eng.current_station_m) - 2 * _HL
+        dd = abs(npc.lane_offset - eng.current_lateral_offset_m) - 2 * _HW
+        c = max(ds, dd) if (ds < 0 and dd < 0) else math.hypot(max(ds, 0.0), max(dd, 0.0))
+        worst = min(worst, c)
+    return worst
+
+
+def _run_toward_lead(lead_speed_kmh, block_adjacent, ticks=900):
+    route = _straight_route_step2()
+    eng = PhysicsEngine(seed=1)
+    eng.set_destination(*route[-1])
+    eng.set_route(route)
+    eng.reset_state(station_m=0.0, speed_kmh=50.0, lateral_offset_m=EGO_LANE_OFFSET_M)
+    tm = _TM(total_length_m=eng.station_distances[-1], seed=1)
+    npcs = [_NPC(id="lead", lane_offset=EGO_LANE_OFFSET_M, speed_kmh=lead_speed_kmh,
+                 station_m=120.0, desired_speed_kmh=lead_speed_kmh, prevent_recycle=True)]
+    if block_adjacent:
+        npcs.append(_NPC(id="wall", lane_offset=_ADJ, speed_kmh=lead_speed_kmh,
+                         station_m=118.0, desired_speed_kmh=lead_speed_kmh, prevent_recycle=True))
+    tm.spawn_scripted_npcs(npcs)
+    eng.traffic = tm
+
+    min_clear = 1e9
+    for _ in range(ticks):
+        eng.update("Maintain Speed", dt=0.1)
+        min_clear = min(min_clear, _min_body_clearance(eng, eng.traffic.npcs))
+        if eng.current_station_m > 200.0:
+            break
+    return min_clear
+
+
+def test_ego_never_overlaps_a_stopped_lead_it_goes_around():
+    # stopped car in the ego lane, adjacent lane clear -> ego brakes, changes
+    # lanes, passes. It must never physically overlap the stopped car.
+    min_clear = _run_toward_lead(lead_speed_kmh=0.0, block_adjacent=False)
+    assert min_clear > 0.5, f"ego body came within {min_clear:.2f} m of the stopped lead"
+
+
+def test_ego_stops_short_of_a_stopped_lead_when_boxed_in():
+    # stopped car ahead AND the adjacent lane blocked alongside -> the ego
+    # cannot go around and MUST stop behind it without overlapping.
+    min_clear = _run_toward_lead(lead_speed_kmh=0.0, block_adjacent=True)
+    assert min_clear > 0.4, f"boxed-in ego closed to {min_clear:.2f} m of the stopped lead"
+
+
+def test_ego_follows_a_slow_lead_without_body_overlap():
+    for lead_kmh in (8.0, 18.0, 28.0):
+        min_clear = _run_toward_lead(lead_speed_kmh=lead_kmh, block_adjacent=True)
+        assert min_clear > 0.4, f"lead@{lead_kmh} km/h: ego closed to {min_clear:.2f} m"
+
+
+def test_forward_sensor_keeps_the_lead_through_an_ego_lane_change():
+    """The sensor must not lose a lead just because the ego's lateral offset
+    moved off that lane -- it covers the corridor between the ego's current
+    and target lane."""
+    tm = _TM(total_length_m=1000.0, seed=1)
+    tm.spawn_scripted_npcs([_NPC(id="lead", lane_offset=EGO_LANE_OFFSET_M, speed_kmh=0.0,
+                                 station_m=60.0, desired_speed_kmh=0.0, prevent_recycle=True)])
+    # ego half-way through a change out of the lead's lane toward the adjacent one
+    sensed = tm.sense_lead_vehicle(
+        ego_station_m=30.0, ego_lane_offset=3.4, ego_target_lane_offset=_ADJ,
+    )
+    assert sensed is not None, "sensor dropped the lead mid-lane-change"
+    # and the reported gap is bumper-to-bumper
+    assert sensed.gap_m == pytest.approx(30.0 - 2 * _HL)
+
+
+def test_forward_sensor_reports_overlap_as_a_negative_gap():
+    tm = _TM(total_length_m=1000.0, seed=1)
+    tm.spawn_scripted_npcs([_NPC(id="lead", lane_offset=EGO_LANE_OFFSET_M, speed_kmh=0.0,
+                                 station_m=103.0, desired_speed_kmh=0.0, prevent_recycle=True)])
+    sensed = tm.sense_lead_vehicle(ego_station_m=100.0, ego_lane_offset=EGO_LANE_OFFSET_M)
+    assert sensed is not None and sensed.gap_m < 0.0  # 3 m station gap - 4.3 m of bodies

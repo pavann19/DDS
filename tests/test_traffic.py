@@ -56,7 +56,8 @@ def test_sensor_detects_a_same_lane_vehicle_ahead_within_range():
     model.npcs = [NpcVehicle(id="npc-0", lane_offset=EGO_LANE_OFFSET_M, speed_kmh=35.0, station_m=40.0)]
     sensed = model.sense_lead_vehicle(ego_station_m=10.0, ego_lane_offset=EGO_LANE_OFFSET_M)
     assert isinstance(sensed, SensedLeadVehicle)
-    assert sensed.gap_m == pytest.approx(30.0)
+    # gap_m is BUMPER-TO-BUMPER: 30 m station gap minus both vehicles' half-lengths
+    assert sensed.gap_m == pytest.approx(30.0 - 2 * 2.15)
     assert sensed.lead_speed_kmh == pytest.approx(35.0)
 
 
@@ -67,7 +68,7 @@ def test_sensor_returns_the_nearest_of_several_candidates():
         NpcVehicle(id="npc-near", lane_offset=EGO_LANE_OFFSET_M, speed_kmh=20.0, station_m=25.0),
     ]
     sensed = model.sense_lead_vehicle(ego_station_m=0.0, ego_lane_offset=EGO_LANE_OFFSET_M)
-    assert sensed.gap_m == pytest.approx(25.0)
+    assert sensed.gap_m == pytest.approx(25.0 - 2 * 2.15)  # bumper-to-bumper
     assert sensed.lead_speed_kmh == pytest.approx(20.0)
 
 
@@ -100,7 +101,7 @@ def test_get_npc_states_returns_full_state_for_rendering():
     states = model.get_npc_states()
     assert len(states) == NPC_COUNT
     for s in states:
-        assert set(s.keys()) == {"id", "lane_offset", "speed_kmh", "station_m"}
+        assert {"id", "lane_offset", "speed_kmh", "station_m"}.issubset(set(s.keys()))
 
 
 # ---------------------------------------------------------------------------

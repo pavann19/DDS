@@ -28,7 +28,8 @@ of backend/frontend disagreement the station bug and the smoothing
 work were about.
 """
 import math
-from dataclasses import dataclass
+from bisect import bisect_left
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -56,6 +57,17 @@ class FrenetFrame:
     station: List[float]                  # cumulative arc length (metres), same length as points_xz
     origin_lat: float
     origin_lng: float
+    _station_array: np.ndarray = field(init=False, repr=False, compare=False)
+    _points_array: np.ndarray = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        # Route geometry is replaced as a whole; cache immutable snapshots.
+        self.points_xz = tuple(tuple(p) for p in self.points_xz)
+        self.station = tuple(self.station)
+        self._station_array = np.asarray(self.station, dtype=float)
+        self._points_array = np.asarray(self.points_xz, dtype=float)
+        self._station_array.flags.writeable = False
+        self._points_array.flags.writeable = False
 
     @property
     def total_length_m(self) -> float:
@@ -133,9 +145,7 @@ def frenet_to_local_xz(frame: FrenetFrame, s: float, d: float) -> Tuple[float, f
     station (needed by pure-pursuit to reason about heading)."""
     n = len(frame.station)
     s = max(0.0, min(s, frame.station[-1]))
-    idx = 0
-    while idx < n - 2 and frame.station[idx + 1] < s:
-        idx += 1
+    idx = max(0, min(n - 2, bisect_left(frame.station, s) - 1))
     ax, az = frame.points_xz[idx]
     bx, bz = frame.points_xz[idx + 1]
     seg_len = frame.station[idx + 1] - frame.station[idx]
@@ -151,6 +161,36 @@ def frenet_to_local_xz(frame: FrenetFrame, s: float, d: float) -> Tuple[float, f
     x = cx + d * right_x
     z = cz + d * right_z
     return x, z, dir_x, dir_z
+
+
+def signed_curvature_at(frame: FrenetFrame, s: float, ds: float = 6.0) -> float:
+    """Signed path curvature (1/m) of the route centreline at station ``s``.
+
+    kappa = d(theta)/d(arc-length), where theta is the tangent's compass
+    heading ``atan2(dir_x, -dir_z)`` -- the SAME convention as
+    ``PhysicsEngine.heading`` and ``pure_pursuit_steering``. Sign: a curve
+    that turns the heading toward -x (a left turn in this frame) gives
+    kappa < 0, so ``atan(WHEELBASE_M * kappa)`` is directly the steady-state
+    front-wheel feed-forward angle for holding that curve. Estimated over a
+    +/- ``ds`` window and clamped to a physical turn-radius floor so a
+    polyline artefact cannot inject a huge feed-forward.
+    """
+    if frame is None or len(frame.station) < 3:
+        return 0.0
+    total = frame.station[-1]
+    s_lo = max(0.0, s - ds)
+    s_hi = min(total, s + ds)
+    span = s_hi - s_lo
+    if span < 1e-6:
+        return 0.0
+    _, _, dx0, dz0 = frenet_to_local_xz(frame, s_lo, 0.0)
+    _, _, dx1, dz1 = frenet_to_local_xz(frame, s_hi, 0.0)
+    th0 = math.atan2(dx0, -dz0)
+    th1 = math.atan2(dx1, -dz1)
+    dth = (th1 - th0 + math.pi) % (2.0 * math.pi) - math.pi
+    kappa = dth / span
+    kappa_max = 1.0 / 8.0  # R >= 8 m -- matches physics_engine's curvature cap
+    return max(-kappa_max, min(kappa_max, kappa))
 
 
 def frenet_to_latlng(frame: FrenetFrame, s: float, d: float) -> Tuple[float, float]:
@@ -172,8 +212,8 @@ def frenet_to_local_xz_batch(
     it picks the exact same segment index for every input -- verified by
     tests/test_perception.py's cross-check against the scalar function, not
     just assumed equivalent."""
-    station_arr = np.asarray(frame.station, dtype=float)
-    points = np.asarray(frame.points_xz, dtype=float)  # (n, 2)
+    station_arr = frame._station_array
+    points = frame._points_array  # (n, 2)
     n = len(station_arr)
 
     s = np.clip(np.asarray(stations, dtype=float), 0.0, station_arr[-1])

@@ -88,7 +88,7 @@ def test_ample_ttc_is_not_flagged():
 # --- evaluate(): road boundary ----------------------------------------------
 
 def test_within_road_boundary_is_not_flagged():
-    verdict = evaluate(ego_speed_mps=15.0, lateral_offset_m=ROAD_BOUNDARY_HARD_LIMIT_M - 0.5,
+    verdict = evaluate(ego_speed_mps=15.0, lateral_offset_m=ROAD_BOUNDARY_HARD_LIMIT_M - 1.0,
                        lateral_accel_mps2=0.5, sensed_lead_gap_m=None, sensed_lead_speed_mps=None)
     assert verdict.approved is True
 
@@ -157,3 +157,61 @@ def test_recover_low_speed_alone_without_a_collision_risk():
         sensed_lead_gap_m=None, sensed_lead_speed_mps=None,
     )
     assert verdict.override_action == OVERRIDE_RECOVER_LOW_SPEED
+
+
+
+def test_hard_proximity_guard_fires_when_creeping_into_a_lead():
+    """A tiny bumper-to-bumper gap with the ego still moving toward a
+    stopped lead must force EMERGENCY_BRAKE even when the TTC path is
+    inconclusive (e.g. noise flips closing speed negative -> ttc None)."""
+    from app.services.safety_shield import evaluate, OVERRIDE_EMERGENCY_BRAKE
+    v = evaluate(
+        ego_speed_mps=3.0,
+        lateral_offset_m=0.0,
+        lateral_accel_mps2=0.0,
+        sensed_lead_gap_m=0.6,       # bumper-to-bumper, below the hard floor
+        sensed_lead_speed_mps=0.0,   # stopped lead
+    )
+    assert v.approved is False
+    assert v.override_action == OVERRIDE_EMERGENCY_BRAKE
+
+
+def test_hard_proximity_guard_does_not_fire_when_matched_or_pulling_away():
+    from app.services.safety_shield import evaluate
+    v = evaluate(
+        ego_speed_mps=8.0,
+        lateral_offset_m=0.0,
+        lateral_accel_mps2=0.0,
+        sensed_lead_gap_m=0.6,
+        sensed_lead_speed_mps=8.2,   # lead is slightly faster -> not closing
+    )
+    assert v.approved is True
+
+
+@pytest.mark.parametrize("speed", [0.0, 10.0])
+def test_existing_overlap_brakes_even_without_closing(speed):
+    verdict = evaluate(speed, 1.75, 0.0, -1.0, speed)
+    assert verdict.overlap_detected
+    assert not verdict.approved
+    assert verdict.override_action == OVERRIDE_EMERGENCY_BRAKE
+
+
+def test_body_crosses_edge_while_center_is_inside():
+    verdict = evaluate(10.0, ROAD_BOUNDARY_HARD_LIMIT_M - 0.2, 0.0, None, None)
+    assert not verdict.body_contained
+    assert not verdict.approved
+
+
+def test_yawed_body_requires_length_clearance():
+    import math
+    verdict = evaluate(10.0, 5.0, 0.0, None, None, heading_error_rad=math.pi/2)
+    assert not verdict.body_contained
+
+
+def test_swept_boundary_matches_actual_positive_left_convention():
+    import math
+    # Positive d is west/left on a northbound road. Turning west grows d.
+    verdict = evaluate(20, 4.6, 0, None, None, heading_error_rad=-math.pi/4)
+    assert verdict.body_contained
+    assert not verdict.swept_body_contained
+    assert not verdict.approved

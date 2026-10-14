@@ -28,6 +28,7 @@ from app.services.planner.lateral import (  # noqa: F401
     LateralCandidate,
     generate_candidates,
     pure_pursuit_steering,
+    ff_stanley_steer,
     quintic_lateral_maneuver_cost,
     select_best_candidate,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "LateralCandidate",
     "generate_candidates",
     "pure_pursuit_steering",
+    "ff_stanley_steer",
     "quintic_lateral_maneuver_cost",
     "select_best_candidate",
 ]

@@ -2,6 +2,8 @@ export type Coordinate = { x: number; y: number; z: number };
 export type FrenetCoordinate = { s: number; d: number };
 export type Quaternion = { x: number; y: number; z: number; w: number };
 
+export interface SceneControl {node_id:number; kind:string; station_m:number; stop_station_m:number; phase:string|null;}
+
 export interface EntityState {
   id: string;
   pose: Coordinate;
@@ -10,6 +12,8 @@ export interface EntityState {
   velocity: number;
   acceleration: number;
   frenet: FrenetCoordinate;
+  relative_heading_deg?: number;
+  lateral_speed_mps?: number;
 }
 
 // Real decision strings from app/services/inference.py's label encoder --
@@ -18,17 +22,97 @@ export interface EntityState {
 // the literal class names the deployed classifier was trained on.
 export type Decision = "Accelerate" | "Decelerate" | "Maintain Speed";
 
+export interface SensorHealthState {
+  camera_required?: boolean;
+  camera_age_s?: number | null;
+  camera_recovery_samples?: number;
+  camera_view_health?: [string, number | null, number, boolean][];
+  monitored: boolean;
+  ready: boolean;
+  reason: string;
+  forward_age_s: number | null;
+  surround_age_s: number | null;
+  recovery_samples: number;
+  faults?: Record<string, string | null>;
+}
+
+export interface MapFeatureEvidence {
+  source: string; way_id: number; map_timestamp: string | null; map_version: number | null;
+  recorded_width_m: number | null; width_tag: string | null; lane_width_verified: false; live_verified: false;
+  access: { status: 'not_tagged' | 'recorded_allowance' | 'recorded_restriction' | 'conditional_unresolved'; live_verified: false; mission_eligible: boolean; tags: Record<string,string> };
+}
+export interface ParkingMapEvidence {
+  lot: MapFeatureEvidence; aisle: MapFeatureEvidence; parking_type_tag: string | null;
+  surface_tag: string | null; capacity_tag: string | null; individual_bay_geometry: 'unavailable';
+  vacancy_live_verified: false; goal_pose_source: string;
+}
+
 export interface EgoState extends EntityState {
+  control_perception?: {mode: string; source: string; fresh: boolean; capture_time_s?: number | null; age_s?: number | null; detections?: number; confirmed_controls?: number; fault?: string | null; camera_views?: {camera_id:string;capture_time_s:number;width:number;height:number;hfov_deg:number;detections:number}[]};
+  camera_view_health?: [string, number | null, number, boolean][];
+  sensor_health?: SensorHealthState;
+  sensed_lead_gap_m?: number | null;
+  configured_cruise_speed_kmh?: number;
+  driving_state?: string;
+  has_arrived?: boolean;
+  remaining_distance_m?: number;
+  parking_status?: string;
+  parking_area?: [number, number][] | null;
+  parking?: { parked: boolean; active: boolean; maneuvering: boolean; contained: boolean; mapped_bay: boolean; map_evidence?: ParkingMapEvidence } | null;
+  junction?: { visually_observed?: boolean; kind: string; phase: string | null; phase_source: string; distance_to_stop_m: number; sensor_clear: boolean } | null;
+  road_semantics?: {
+    status: "mapped_rules_partial" | "unknown_or_ambiguous";
+    posted_speed_limit_kmh: number | null;
+    lane_count: number | null;
+    oneway: string | null;
+    way_id: number | null;
+    map_timestamp: string | null;
+    recorded_width_m?: number | null;
+    width_tag?: string | null;
+    map_version?: number | null;
+    lane_width_verified: boolean;
+    parking_verified: boolean;
+  };
+  geographic_position?: {lat: number; lng: number};
   decision: Decision;
   confidence: number; // 0..1, the classifier's max class probability
   // Which physical constraint is currently binding the speed controller --
   // "car_following" is the IDM braking-for-traffic case, "lateral_accel_limit"
   // is cornering, etc. See app/services/physics_engine.py's speed_limit_reason.
   speed_limit_reason: string;
-  target_velocity: number;
+  target_velocity: number | null;
+  control_source?: string;
+  requested_acceleration?: number | null;
   steering_angle: number;
   throttle: number;
   brake: number;
+  world_pos?: Coordinate;
+  world_heading_deg?: number;
+  road_heading_deg?: number;
+  relative_heading_deg?: number;
+  steering_angle_rad?: number;
+  wheels?: {
+    steering_rad: [number, number, number, number];
+    rotation_rad: [number, number, number, number];
+    wheelbase_m: number; track_width_m: number; radius_m: number;
+    pose_reference: 'vehicle_center';
+  };
+  grip_budget?: {
+    scope: string;
+    limit_mps2?: number;
+    lateral_bound_mps2?: number;
+    total_bound_mps2?: number;
+    already_infeasible: boolean;
+    recovery_active?: boolean;
+    within_modeled_budget?: boolean;
+    steering_limited?: boolean;
+    acceleration_limited?: boolean;
+  } | null;
+  kinematic_sideslip_rad?: number;
+  lateral_accel_mps2?: number;
+  signed_lateral_accel_mps2?: number;
+  yaw_rate_degps?: number;
+  signals?: { left: boolean; right: boolean; hazards: boolean; brake: boolean };
 }
 
 export interface PerceptionObject extends EntityState {
@@ -50,7 +134,22 @@ export interface PlannerCandidate {
 }
 
 export interface PlannerState {
+  continuous_modeled_corridor_verified?: boolean;
+  continuous_route_station_verified?: boolean;
+  initial_actual_steering_checked?: boolean;
+  sampled_modeled_vehicle_envelope_verified?: boolean;
+  full_cartesian_swept_corridor_verified?: boolean;
+  modeled_straight_vehicle_width_m?: number | null;
+  continuous_min_half_width_margin_m?: number | null;
+  joint_plan_status?: 'unavailable' | 'committed' | 'lane_following';
+  checked_horizon_s?: number | null;
+  feasibility_friction_mu?: number | null;
+  peak_combined_lateral_accel_mps2?: number | null;
+  initial_speed_recovery?: boolean;
   trajectory: Coordinate[];
+  trajectory_source?: string;
+  source_tick?: number | null;
+  lateral_target_m?: number;
   lookahead_point: Coordinate;
   lane_center: number;
   curvature: number;
@@ -81,6 +180,10 @@ export interface AnomalyResult {
 // after the planner/IDM decision, not part of it. See that module's
 // docstring for why it's a separate system rather than more planner logic.
 export interface SafetyShieldState {
+  overlap_detected?: boolean;
+  body_contained?: boolean;
+  swept_body_contained?: boolean;
+  footprint_collision_risk?: boolean;
   approved: boolean;
   risk_level: "NONE" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   reasons: string[];
@@ -104,6 +207,7 @@ export interface DriverScore {
 
 // app/services/scenario_engine.py's ScenarioEngine.get_state()
 export interface ScenarioState {
+  params?: Record<string, number | boolean>;
   id: string | null;
   name: string;
   category: "normal" | "traffic" | "maneuver" | "safety_critical" | string;
@@ -196,6 +300,9 @@ export interface DriverAnalytics {
 //   heavy     large payloads (surround tracks, per-agent predictions),
 //             candidates for on-demand / delta-encoding in a later phase.
 export interface TelemetryStatePayload {
+  epoch: number;
+  route_version: number;
+  route_status: string;
   protocol_version: "3.0";
   simulation_id: string;
   run_id: string;
@@ -218,6 +325,7 @@ export interface TelemetryStatePayload {
       driver_analytics: DriverAnalytics;
     };
     heavy: {
+      scene_controls?: SceneControl[];
       surround_perception?: SurroundTrack[];
       prediction?: PredictionState;
     };
@@ -237,9 +345,20 @@ export interface RouteStep {
   distance: number;
 }
 export interface RoutePayload {
+  epoch?: number;
+  route_version?: number;
   type: "route";
+  road_context?: [number, number][];
   waypoints: [number, number][]; // [lat, lng] pairs
   steps: RouteStep[];
+}
+
+export interface CommandResult {
+  type: 'command_result';
+  command_id: string | null;
+  status: string;
+  message?: string | null;
+  epoch?: number;
 }
 
 export interface SimulationEvent {

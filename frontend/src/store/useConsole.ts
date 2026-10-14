@@ -12,15 +12,21 @@ const ORDER: Density[] = ['focus', 'standard', 'inspect'];
 
 interface ConsoleState {
   density: Density;
+  isEvalOpen: boolean;
   setDensity: (d: Density) => void;
   cycleDensity: () => void;
+  setEvalOpen: (open: boolean) => void;
+  toggleEval: () => void;
 }
 
 export const useConsole = create<ConsoleState>((set) => ({
   density: 'standard',
+  isEvalOpen: false,
   setDensity: (density) => set({ density }),
   cycleDensity: () =>
     set((s) => ({ density: ORDER[(ORDER.indexOf(s.density) + 1) % ORDER.length] })),
+  setEvalOpen: (isEvalOpen) => set({ isEvalOpen }),
+  toggleEval: () => set((s) => ({ isEvalOpen: !s.isEvalOpen })),
 }));
 
 export const DENSITY_ORDER = ORDER;

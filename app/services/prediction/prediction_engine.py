@@ -18,7 +18,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from app.services.frenet import FrenetFrame
+from app.services.frenet import FrenetFrame, signed_curvature_at
 from app.services.interfaces import AgentPrediction, PredictionOutput, SimClock
 from app.services.prediction.forecaster import (
     AgentKinematics,
@@ -60,6 +60,24 @@ PROACTIVE_DECEL_MPS2 = 1.2
 # MAX_LEAD_S away (ignore a barely-drifting car many seconds out).
 MIN_LEAD_S = 1.2
 MAX_LEAD_S = 5.0
+# An agent travelling clearly AGAINST the route direction is oncoming
+# traffic in a physically separated opposing lane -- it is not a
+# lane-merge / cut-in threat model (a genuine head-on crossing is the
+# Safety Shield's / RSS's concern, not proactive lane-merge easing).
+# Excluding it removes a sustained false-positive cut-in the intent
+# estimator produced from small lateral components of a fast oncoming
+# velocity vector.
+OPPOSING_TRAFFIC_VS_MPS = -2.0
+
+# Cut-in intent is scored from the agent's LANE-RELATIVE lateral rate
+# d(d)/dt, position-differenced from its own tracked Frenet offset over a
+# short window -- NOT from projecting the EKF velocity vector onto the
+# lane normal. On a curve the EKF velocity estimate lags the true heading
+# and that projection shows a large phantom inward drift (measured up to
+# ~2 m/s on an R=80 m bend) for an agent that is simply following its
+# lane; its lateral OFFSET, by contrast, is ~constant. The velocity
+# projection (v_s) is still used for the opposing-traffic gate.
+LATERAL_RATE_WINDOW_S = 0.5
 
 
 # Windowed Frenet re-projection: a tracked agent moves at most a few metres
@@ -71,9 +89,11 @@ FRENET_SEARCH_WINDOW = 25
 @dataclass
 class _TrackHistory:
     kin: AgentKinematics
-    drift_ema: float = 0.0
+    drift_ema: float = 0.0        # EMA of the position-differenced lane-relative lateral rate
     accel_ema: float = 0.0
     seg_idx: int = 0
+    v_s_ema: float = 0.0
+    d_hist: tuple = ()           # recent (agent_d) samples, newest last
 
 
 @dataclass
@@ -91,6 +111,13 @@ class PredictionResult:
     # Comfort-bounded deceleration the longitudinal controller should
     # compose in (0.0 = no proactive action this tick).
     proactive_decel_mps2: float = 0.0
+    # I2 observation substrate: per-track de-biased lane-relative lateral
+    # rate / longitudinal accel (the EMA-smoothed, Frenet-geometry-corrected
+    # quantities the intent heuristic already computes internally). Exposed
+    # so AgentSlot.d_rate_mps / d_accel_mps2 can be populated from a
+    # noise-robust source instead of the fragile pre-integrated p_cut_in.
+    lateral_rate_by_track: Dict[int, float] = field(default_factory=dict)
+    long_accel_by_track: Dict[int, float] = field(default_factory=dict)
 
 
 class PredictionEngine:
@@ -135,8 +162,11 @@ class PredictionEngine:
                 logger.exception("prediction: skipping track %r after error", getattr(track, "track_id", "?"))
 
         for est_tid, est in intents.items():
+            hist = self._history.get(est_tid)
+            is_opposing = hist is not None and hist.v_s_ema < OPPOSING_TRAFFIC_VS_MPS
             if (
-                est.p_cut_in > CUT_IN_ACTION_THRESHOLD
+                not is_opposing
+                and est.p_cut_in > CUT_IN_ACTION_THRESHOLD
                 and est.time_to_cross_s is not None
                 and MIN_LEAD_S <= est.time_to_cross_s <= MAX_LEAD_S
                 and est.p_cut_in > best_p
@@ -155,6 +185,8 @@ class PredictionEngine:
             cut_in_track_id=best_id,
             time_to_cross_s=best_ttc,
             proactive_decel_mps2=proactive,
+            lateral_rate_by_track={tid: h.drift_ema for tid, h in self._history.items()},
+            long_accel_by_track={tid: h.accel_ema for tid, h in self._history.items()},
         )
 
     def _process_track(self, track, frenet_frame, ego_lateral_offset_m, dt, predictions, intents):
@@ -179,14 +211,41 @@ class PredictionEngine:
             agent_d, raw_drift = kin.x, kin.vx
         raw_accel = kin.a_long_mps2
 
-        if prev is None:
-            drift_ema, accel_ema = raw_drift, raw_accel
+        raw_v_s = v_s if frenet_frame is not None else kin.vz
+
+        # Lane-relative lateral rate from the agent's OWN tracked offset,
+        # position-differenced over ~LATERAL_RATE_WINDOW_S. Immune to the
+        # EKF velocity-vector lag that fakes an inward drift on a curve.
+        _n_win = max(1, int(round(LATERAL_RATE_WINDOW_S / max(dt, 1e-3))))
+        _d_hist = ((prev.d_hist if prev else ()) + (agent_d,))[-(_n_win + 1):]
+        if len(_d_hist) >= 2:
+            _span_s = (len(_d_hist) - 1) * dt
+            lane_rel_rate = (_d_hist[-1] - _d_hist[0]) / _span_s if _span_s > 1e-6 else 0.0
         else:
-            drift_ema = (1 - SMOOTHING_ALPHA) * prev.drift_ema + SMOOTHING_ALPHA * raw_drift
+            lane_rel_rate = 0.0
+
+        # Subtract the drift attributable purely to FRENET-FRAME GEOMETRY: an
+        # agent advancing along a road of signed curvature kappa at constant
+        # true lateral offset d, projected back to Frenet, has its projected
+        # d change at ~ -v_s * kappa * d (the offset point sits at a different
+        # radius than the centreline). Measured to match the observed phantom
+        # drift within ~10% on R=80 m. What remains is genuine lane-relative
+        # motion.
+        if frenet_frame is not None and abs(v_s) > 0.5:
+            _kappa_road = signed_curvature_at(frenet_frame, s0)
+            lane_rel_rate -= v_s * _kappa_road * agent_d
+        
+
+        if prev is None:
+            drift_ema, accel_ema, v_s_ema = lane_rel_rate, raw_accel, raw_v_s
+        else:
+            drift_ema = (1 - SMOOTHING_ALPHA) * prev.drift_ema + SMOOTHING_ALPHA * lane_rel_rate
             accel_ema = (1 - SMOOTHING_ALPHA) * prev.accel_ema + SMOOTHING_ALPHA * raw_accel
+            v_s_ema = (1 - SMOOTHING_ALPHA) * prev.v_s_ema + SMOOTHING_ALPHA * raw_v_s
 
         self._history[tid] = _TrackHistory(
             kin=kin, drift_ema=drift_ema, accel_ema=accel_ema, seg_idx=seg_idx,
+            v_s_ema=v_s_ema, d_hist=tuple(_d_hist),
         )
 
         est = estimate_intent(

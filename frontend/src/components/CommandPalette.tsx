@@ -56,7 +56,7 @@ export function CommandPalette() {
           <Search className="w-5 h-5 text-[var(--text-muted)] mr-2" />
           <Command.Input
             autoFocus
-            placeholder="Type a command…  (density, scenario, pause)"
+            placeholder="Find a setting or drive control…"
             className="w-full bg-transparent outline-none text-[var(--text-bright)] py-2 placeholder:text-[var(--text-muted)]"
           />
         </div>
@@ -69,14 +69,14 @@ export function CommandPalette() {
           <Command.Group
             heading={
               <div className="px-2 py-1 text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-                Console density
+                Surroundings view
               </div>
             }
           >
             {DENSITY_ORDER.map((d) => (
               <Command.Item key={d} onSelect={run(() => setDensity(d))} className={ITEM_CLASS}>
                 <LayoutDashboard className="w-4 h-4 mr-3" />
-                Density: {d}
+                {d === 'inspect' ? 'Detailed surroundings' : d === 'focus' ? 'Essential surroundings' : 'Standard surroundings'}
               </Command.Item>
             ))}
           </Command.Group>
@@ -84,7 +84,7 @@ export function CommandPalette() {
           <Command.Group
             heading={
               <div className="px-2 py-1 text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-                Scenarios
+                Driving environments
               </div>
             }
           >
@@ -99,21 +99,21 @@ export function CommandPalette() {
           <Command.Group
             heading={
               <div className="px-2 py-1 text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-                Simulation
+                Drive controls
               </div>
             }
           >
             <Command.Item onSelect={run(togglePause)} className={ITEM_CLASS}>
               <Pause className="w-4 h-4 mr-3 text-[var(--warning)]" />
-              Pause / Resume [Space]
+              Pause / Resume drive [Space]
             </Command.Item>
             <Command.Item onSelect={run(stepSimulation)} className={ITEM_CLASS}>
               <StepForward className="w-4 h-4 mr-3 text-[var(--brand)]" />
-              Step Forward (+1 tick)
+              Advance one step
             </Command.Item>
             <Command.Item onSelect={run(resetSimulation)} className={ITEM_CLASS}>
               <RotateCcw className="w-4 h-4 mr-3 text-[var(--text-muted)]" />
-              Reset Scenario
+              Restart current drive
             </Command.Item>
           </Command.Group>
         </Command.List>

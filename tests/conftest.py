@@ -76,7 +76,9 @@ def _stub_live_routing(monkeypatch):
 
     try:
         import app.api.websockets as _ws
+        import app.services.simulation_session as _sim
         monkeypatch.setattr(_ws, "get_route", _no_route, raising=False)
+        monkeypatch.setattr(_sim, "get_route", _no_route, raising=False)
     except Exception:
         pass
 

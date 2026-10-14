@@ -312,3 +312,53 @@ def test_perception_engine_performance_budget_30_actors():
 
     best_ms = min(batch_times_ms)
     assert best_ms < 2.0, f"perception pipeline's best batch averaged {best_ms:.3f}ms/tick for 30 actors (budget: 2.0ms); all batches: {[f'{t:.3f}' for t in batch_times_ms]}"
+
+
+def test_batched_position_update_matches_full_kalman_algebra():
+    import copy
+    tracker = MultiTargetTracker()
+    tracker.step(.1, [_det(x=float(i * 10), z=0., source_id=str(i)) for i in range(8)])
+    rng = np.random.default_rng(413)
+    for track in tracker.tracks.values():
+        a = rng.normal(size=(6, 6))
+        track.covariance = a @ a.T + np.eye(6) * .1
+        track.state = rng.normal(size=6)
+    tracker._batched_predict(.1)
+    references = [copy.deepcopy(t) for t in tracker.tracks.values()]
+    detections = [_det(x=float(i), z=float(-i)) for i in range(8)]
+    for track, detection in zip(references, detections):
+        track.update((detection.x, detection.z))
+    matches = [(tid, i) for i, tid in enumerate(tracker.tracks)]
+    tracker._batched_update(matches, np.arange(8), detections)
+    for actual, expected in zip(tracker.tracks.values(), references):
+        np.testing.assert_allclose(actual.state, expected.state, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(actual.covariance, expected.covariance, rtol=1e-12, atol=1e-12)
+
+
+def test_detection_heading_rotates_occupancy_with_measured_velocity():
+    engine = SurroundPerceptionEngine()
+    engine.step(_straight_frame(),100,0,[_npc(station_m=110,lane_offset=0)],.1)
+    assert engine.last_detections
+    for detection in engine.last_detections:
+        assert detection.heading_rad == pytest.approx(math.atan2(detection.vz,detection.vx))
+        assert abs(detection.heading_rad) > 1
+
+
+@pytest.mark.parametrize("speed", [0, 40])
+def test_position_noise_keeps_stopped_and_moving_vehicle_orientation(speed):
+    from app.services.perception.perception_engine import PerceptionNoiseConfig
+    engine = SurroundPerceptionEngine(noise=PerceptionNoiseConfig(position_sigma_m=.1), seed=42)
+    npc = _npc(station_m=110, lane_offset=0)
+    npc.speed_kmh = speed
+    engine.step(_straight_frame(), 100, 0, [npc], .1)
+    assert len(engine.last_detections) == 1
+    assert engine.last_detections[0].heading_rad == pytest.approx(-math.pi / 2)
+
+
+def test_batched_sensor_membership_preserves_wrap_and_range_boundaries():
+    from app.services.perception.sensor_rig import batch_frustum_membership, RelativeObservation
+    angles = [-180,-179,-150,-135,-90,-60,-15,0,15,60,90,135,150,179,180]
+    samples = [(distance,angle) for distance in (0,60,80,100,150,150.001) for angle in angles]
+    matrix = batch_frustum_membership([p[0] for p in samples],[p[1] for p in samples])
+    for (distance,angle),row in zip(samples,matrix):
+        assert [f.name for f,visible in zip(SENSOR_RIG,row) if visible] == detecting_frustums(RelativeObservation(distance,angle,0,0))

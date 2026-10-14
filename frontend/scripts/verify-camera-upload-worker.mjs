@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import ts from 'typescript';
+import * as readbackModule from '../src/lib/sceneCameraReadback.ts';
+const source=fs.readFileSync(new URL('../src/workers/sceneCameraUploadWorker.ts',import.meta.url),'utf8');
+const code=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const posted=[],requests=[];
+const self={postMessage(message){posted.push(message);}};
+vm.runInNewContext(code,{self,exports:{},AbortController,Uint8Array,performance,
+  require(name){assert.equal(name,'../lib/sceneCameraReadback');return readbackModule;},
+  setTimeout:()=>1,clearTimeout:()=>{},fetch:(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}))});
+const send=data=>self.onmessage({data});
+const headers={'X-Camera-Capture-Time':'12.3','X-Camera-Tick':'123','X-Camera-Publisher':'real-scene'};
+const bundle=sequence=>({type:'UPLOAD',generation:'live:1',sequence,url:'http://local/camera',headers,buffer:new Uint8Array([8,7,6]).buffer});
+send({type:'RESET',generation:'live:1'});
+send(bundle(1));send(bundle(2));send(bundle(3));
+assert.equal(requests.length,1,'single backend admission credit bounds transport');
+assert.equal(posted.length,2,'second and third concurrent uploads rejected');
+assert.equal(posted.at(-1).reason,'upload_capacity');
+assert.deepEqual([...requests[0].options.body],[8,7,6],'raw pixels unchanged');
+assert.deepEqual(requests[0].options.headers,headers,'capture identity unchanged');
+requests[0].resolve({ok:false,status:409,json:async()=>({detail:{stale_reason:'stale_capture'}})});
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(posted.at(-1).reason,'stale_capture');
+send(bundle(4));assert.equal(requests.length,2,'acknowledgement releases upload credit');
+send({type:'RESET',generation:'live:2'});
+assert.equal(requests[1].options.signal.aborted,true,'generation changes abort previous transport');
+send(bundle(4));assert.equal(requests.length,2,'old generation cannot upload');
+send({...bundle(1),generation:'live:2'});
+assert.equal(requests.length,3);
+requests[2].resolve({ok:true,status:200});
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(posted.at(-1).generation,'live:2');assert.equal(posted.at(-1).status,200);
+console.log('Raw RGB/identity preserved; worker upload limit, rejection and generation cancellation verified.');

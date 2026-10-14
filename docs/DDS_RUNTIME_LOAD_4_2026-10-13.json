@@ -1,0 +1,85 @@
+{
+  "scope": "actual realtime mapped session; simulated vehicle; in-process JSON consumers",
+  "seconds_requested": 30.0,
+  "consumers": 4,
+  "messages_received": [
+    301,
+    301,
+    301,
+    301
+  ],
+  "ml_ready": true,
+  "sim_time_s": 30.02,
+  "real_time_factor": 1.0006005736634895,
+  "stages": {
+    "perception": {
+      "count": 600,
+      "deadline_misses": 0,
+      "sample_count": 600,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 0.35530001332517713,
+      "p95_ms": 0.5579999997280538,
+      "p99_ms": 0.7261999999172986,
+      "max_ms": 2.9304000054253265
+    },
+    "planning": {
+      "count": 300,
+      "deadline_misses": 0,
+      "sample_count": 300,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 0.28049999673385173,
+      "p95_ms": 0.3966999938711524,
+      "p99_ms": 0.596800004132092,
+      "max_ms": 3.3939999993890524
+    },
+    "control_safety_physics": {
+      "count": 1501,
+      "deadline_misses": 0,
+      "sample_count": 1501,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 1.0110000002896413,
+      "p95_ms": 6.281599999056198,
+      "p99_ms": 12.269500002730638,
+      "max_ms": 15.751300001284108
+    },
+    "clock": {
+      "count": 3002,
+      "deadline_misses": 0,
+      "sample_count": 2000,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 0.010599993402138352,
+      "p95_ms": 0.01930000144056976,
+      "p99_ms": 0.02680000034160912,
+      "max_ms": 0.13270000636111945
+    },
+    "telemetry_build_dispatch": {
+      "count": 300,
+      "deadline_misses": 0,
+      "sample_count": 300,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 0.6192999862832949,
+      "p95_ms": 0.9945999918272719,
+      "p99_ms": 1.0536000045249239,
+      "max_ms": 2.955499992822297
+    }
+  },
+  "serialization": {
+    "count": 1204,
+    "p50_ms": 0.15979999443516135,
+    "p95_ms": 0.24120000307448208,
+    "p99_ms": 0.2733000001171604,
+    "max_ms": 0.5475000070873648
+  },
+  "scheduling_lateness": {
+    "count": 1019,
+    "p50_ms": 8.825000011711381,
+    "p95_ms": 15.431800013175234,
+    "p99_ms": 20.25040000444278,
+    "max_ms": 105.06970001733862
+  }
+}

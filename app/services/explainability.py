@@ -9,6 +9,7 @@ import os
 import numpy as np
 import logging
 from app.core.config import settings
+from app.services.model_runtime import bound_inference_threads
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class ExplainabilityEngine:
             try:
                 # SECURITY NOTE: Unsafe deserialization using joblib.
                 self.model = joblib.load(self.model_path)
+                bound_inference_threads(self.model)
                 self.explainer = shap.TreeExplainer(self.model)
                 logger.info(f"Loaded Explainability model from {self.model_path}")
             except Exception as e:

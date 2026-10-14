@@ -74,3 +74,6 @@ node_modules/
 
 # Standalone reference prototype (not part of the DDS app build)
 experimental-ui/
+
+# I2 experiment outputs (large per-tick logs) stay local
+experiments/_out/

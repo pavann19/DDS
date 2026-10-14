@@ -162,3 +162,53 @@ def pure_pursuit_steering(
     alpha = target_bearing_rad - heading_rad
     alpha = (alpha + math.pi) % (2 * math.pi) - math.pi
     return math.atan2(2.0 * wheelbase_m * math.sin(alpha), lookahead_dist_m)
+
+
+# ---------------------------------------------------------------------------
+# Feed-forward + Stanley path tracker (replaces the pure-pursuit feedback
+# law for BOTH steady-state lane keeping and committed-maneuver following).
+#
+# Pure pursuit with a far lookahead point is a feedback-only law: on a curve
+# it aims at a point whose chord cuts the corner, so it lags the path by
+# ~ Ld^2 * kappa / 4 and then overshoots on exit. The ego's cross-track
+# offset (Frenet d) and heading are known exactly here, so a Stanley law on
+# those plus a curvature feed-forward tracks a curve with no steady-state
+# lag and proper damping. Frenet d is +LEFT in this codebase (a point north
+# of an eastward centreline has d > 0) and positive steer turns the car
+# toward -d, so the cross-track error that feeds the law is (current - target).
+# ---------------------------------------------------------------------------
+STANLEY_K_CTE = 2.2          # cross-track gain, via atan2(k*e, v)
+STANLEY_K_HEADING = 1.0      # heading-error gain
+STANLEY_SOFT_MPS = 1.5       # softening speed so the cross-track term is finite at v -> 0
+STANLEY_CTE_CLAMP_M = 3.0    # cap the cross-track term's effective error (anti-windup)
+
+
+def ff_stanley_steer(
+    *,
+    current_d_m: float,
+    target_d_m: float,
+    ego_heading_deg: float,
+    road_heading_deg: float,
+    road_curvature_signed_1pm: float,
+    v_mps: float,
+    wheelbase_m: float,
+    steer_limit_rad: float,
+    k_cte: float = STANLEY_K_CTE,
+    k_heading: float = STANLEY_K_HEADING,
+    soft_mps: float = STANLEY_SOFT_MPS,
+    cte_clamp_m: float = STANLEY_CTE_CLAMP_M,
+) -> float:
+    """Front-wheel angle (rad, clamped to +/- steer_limit_rad) to track the
+    lane offset ``target_d_m`` on a road of signed curvature
+    ``road_curvature_signed_1pm`` at the ego's station."""
+    delta_ff = math.atan(wheelbase_m * road_curvature_signed_1pm)
+
+    heading_err = math.radians(road_heading_deg - ego_heading_deg)
+    heading_err = (heading_err + math.pi) % (2.0 * math.pi) - math.pi
+
+    cte = current_d_m - target_d_m
+    cte = max(-cte_clamp_m, min(cte_clamp_m, cte))
+    delta_cte = math.atan2(k_cte * cte, v_mps + soft_mps)
+
+    steer = delta_ff + k_heading * heading_err + delta_cte
+    return max(-steer_limit_rad, min(steer_limit_rad, steer))

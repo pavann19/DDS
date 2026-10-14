@@ -111,6 +111,32 @@ class EgoProprioception:
 
 
 @dataclass(frozen=True)
+class SafetyDetection:
+    """Post-noise, pre-tracker sensor footprint; no actor/source identity."""
+    x: float
+    z: float
+    vx: float
+    vz: float
+    length_m: float
+    width_m: float
+
+
+@dataclass(frozen=True)
+class SensorHealth:
+    """Capture times supplied by the sensor producer, in simulation seconds.
+
+    Empty detections are a valid measurement. A missing capture time is not.
+    Neither wall time nor a consumer's observation time can refresh a feed.
+    """
+    forward_capture_time_s: Optional[float]
+    surround_capture_time_s: Optional[float]
+    camera_required: bool = False
+    camera_capture_time_s: Optional[float] = None
+    camera_required_views: Tuple[str, ...] = ()
+    camera_capture_times_s: Tuple[Tuple[str, Optional[float]], ...] = ()
+
+
+@dataclass(frozen=True)
 class SensorObservation:
     """Everything -- and *only* what -- the Driver is allowed to read this tick.
 
@@ -134,6 +160,8 @@ class SensorObservation:
     # ego's sensor-resolved picture (``perception_engine.SurroundTrack`` or a
     # dict shaped like it). Never raw NPCs.
     surround_tracks: Tuple[Any, ...] = ()
+    safety_detections: Optional[Tuple[SafetyDetection, ...]] = None
+    safety_measurement_age_s: float = 0.0
 
     # Log-odds occupancy grid snapshot (``occupancy_grid.OccupancyGrid`` or an
     # immutable view of one). Optional: only present when a route exists.
@@ -142,6 +170,15 @@ class SensorObservation:
     # Active route geometry (``frenet.FrenetFrame``). Map data -- the Driver
     # needs it to project candidates; it carries no traffic state.
     frenet_frame: Optional[Any] = None
+    # Dated map tags matched to ego geometry/direction; not traffic truth.
+    road_rules: Optional[Any] = None
+    # Recorded route controls with explicitly simulated signal observations.
+    traffic_controls: Tuple[Any, ...] = ()
+    parking: Optional[Any] = None
+    # None is the explicitly unmonitored legacy adapter contract. The DDS
+    # simulator always supplies producer times, including missing feeds.
+    sensor_health: Optional[SensorHealth] = None
+
 
 
 # ---------------------------------------------------------------------------

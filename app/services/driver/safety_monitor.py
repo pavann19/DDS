@@ -55,6 +55,12 @@ class SafetyMonitor:
         a_max_brake_mps2: float,
         recovery_speed_kmh: float,
         speed_kp: float,
+        heading_error_rad: float = 0.0,
+        footprint_risk: bool = False,
+        rear_conflict: bool = False,
+        vehicle_width_m: float = 1.8,
+        vehicle_length_m: float = 4.8,
+        motion_heading_error_rad: Optional[float] = None,
     ) -> Tuple[float, Optional[str]]:
         """Evaluate the shield and apply its veto to ``desired_accel``.
 
@@ -63,6 +69,9 @@ class SafetyMonitor:
         limiter downstream, exactly as before -- this method does not clamp.
         """
         self.verdict = safety_shield.evaluate(
+            heading_error_rad=heading_error_rad,
+            vehicle_width_m=vehicle_width_m, vehicle_length_m=vehicle_length_m,
+            motion_heading_error_rad=motion_heading_error_rad,
             ego_speed_mps=ego_speed_mps,
             lateral_offset_m=lateral_offset_m,
             lateral_accel_mps2=lateral_accel_mps2,
@@ -70,6 +79,16 @@ class SafetyMonitor:
             sensed_lead_speed_mps=sensed_lead_speed_mps,
         )
 
+        if rear_conflict:
+            if self.verdict.risk_level == safety_shield.RISK_NONE:
+                self.verdict.risk_level = safety_shield.RISK_MEDIUM
+            self.verdict.reasons.append("Predicted rear conflict; braking could increase rear closing speed")
+        self.verdict.footprint_collision_risk = footprint_risk
+        if footprint_risk:
+            self.verdict.approved = False
+            self.verdict.risk_level = safety_shield.RISK_CRITICAL
+            self.verdict.override_action = safety_shield.OVERRIDE_EMERGENCY_BRAKE
+            self.verdict.reasons.append("Sensor footprint overlap or collision within 0.1s sweep")
         reason: Optional[str] = None
         if self.verdict.override_action == safety_shield.OVERRIDE_EMERGENCY_BRAKE:
             # Imminent collision (TTC critical): force maximum physical

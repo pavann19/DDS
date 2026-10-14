@@ -16,7 +16,7 @@ export function toLocalXZ(lat: number, lng: number, originLat: number, originLng
 }
 
 export interface RouteGeometry {
-  /** Uniformly (~RESAMPLE_M) spaced samples along the SMOOTHED centreline. */
+  /** Authoritative backend centreline points, without a second smoothing pass. */
   points: THREE.Vector3[];
   /** Unit forward tangent at each sample (continuous through corners). */
   tangents: THREE.Vector3[];
@@ -27,17 +27,8 @@ export interface RouteGeometry {
   originLng: number;
 }
 
-// The backend streams a coarse polyline (real OSRM route, resampled every
-// few metres). Rendering it directly gives ~90 deg cusps at every junction
-// with no turn radius -- the road looks unbuildable and vehicles snap
-// their heading through the corner. We fit a centripetal Catmull-Rom
-// through those waypoints (same technique the reference proving-ground
-// road uses) and resample it uniformly, so every corner becomes a real
-// swept arc and every tangent is continuous. Station `s` from the backend
-// still maps by arc length; the smoothing shortcuts corners by at most a
-// few metres over a multi-km route, which is invisible next to the win.
-const RESAMPLE_M = 2.0;
-const CATMULL_TENSION = 0.5;
+// Physics owns path smoothing. A second spline here changes stations and
+// roadside positions near corners, breaking camera/map association.
 
 /** Builds a smoothed local-frame route geometry from real [lat, lng]
  * waypoints (app/api/websockets.py's "route" message). Returns null if
@@ -49,28 +40,21 @@ export function buildRouteGeometry(waypoints: [number, number][]): RouteGeometry
   const rawPoints = waypoints
     .filter((p) => p && typeof p[0] === 'number' && typeof p[1] === 'number')
     .map(([lat, lng]) => toLocalXZ(lat, lng, originLat, originLng))
-    .filter((p) => !isNaN(p.x) && !isNaN(p.z));
+    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.z));
   if (rawPoints.length < 2) return null;
 
   // De-dupe near-identical points -- a near-zero-length segment gives the
   // spline a degenerate control point and a NaN tangent.
   const ctrl: THREE.Vector3[] = [rawPoints[0]];
   for (let i = 1; i < rawPoints.length; i++) {
-    if (rawPoints[i].distanceTo(ctrl[ctrl.length - 1]) > 0.5) ctrl.push(rawPoints[i]);
+    if (rawPoints[i].distanceTo(ctrl[ctrl.length - 1]) > 1e-6) ctrl.push(rawPoints[i]);
   }
   if (ctrl.length < 2) return null;
 
-  const curve = new THREE.CatmullRomCurve3(ctrl, false, 'centripetal', CATMULL_TENSION);
-
-  // Uniform arc-length resample of the SMOOTH curve; tangents cached so
-  // per-frame station lookups never re-run the arc-length remap.
-  const rawLen = curve.getLength();
-  const divisions = Math.max(2, Math.min(4000, Math.ceil(rawLen / RESAMPLE_M)));
-  const points = curve.getSpacedPoints(divisions).map((p) => p.setY(0));
-  const tangents = points.map((_, i) => {
-    const u = divisions > 0 ? i / divisions : 0;
-    return curve.getTangentAt(u).setY(0).normalize();
-  });
+  const points = ctrl;
+  const tangents = points.map((_, i) => new THREE.Vector3()
+    .subVectors(points[Math.min(points.length-1,i+1)], points[Math.max(0,i-1)])
+    .setY(0).normalize());
 
   const distances = [0];
   let totalLength = 0;
@@ -127,7 +111,9 @@ export interface RoadRibbon {
  * a fraction of a degree, so the perpendicular offset never blows up --
  * the miter clamp is kept only as a belt-and-braces guard for any
  * residual kink. Default width is a real 4-lane cross-section (~17.6 m). */
-export function buildRoadRibbon(geom: RouteGeometry, halfWidth = 8.8): RoadRibbon {
+export const MODELED_ROAD_HALF_WIDTH_M = 8.8;
+
+export function buildRoadRibbon(geom: RouteGeometry, halfWidth = MODELED_ROAD_HALF_WIDTH_M): RoadRibbon {
   const MITER_LIMIT = 3.0;
   const { points } = geom;
 
@@ -183,8 +169,9 @@ export function buildRoadRibbon(geom: RouteGeometry, halfWidth = 8.8): RoadRibbo
 
     if (i < points.length - 1) {
       const base = i * 2;
-      indices.push(base, base + 1, base + 2);
-      indices.push(base + 1, base + 3, base + 2);
+      // The road must face +Y; reversed winding culls its driving surface.
+      indices.push(base, base + 2, base + 1);
+      indices.push(base + 1, base + 2, base + 3);
     }
   }
 
@@ -236,4 +223,19 @@ export function sampleFrenetCorridor(
     points.push(pos.setY(0.15));
   }
   return points;
+}
+
+/** Roadside clearance uses the same mitered asphalt vertices as rendering.
+ * This is modeled display geometry, not surveyed sign placement. */
+export function roadsidePosition(geom: RouteGeometry, ribbon: RoadRibbon, station: number, clearance = 1.2) {
+  const s = Math.max(0, Math.min(station, geom.totalLength));
+  let i = 0;
+  while (i < geom.distances.length - 2 && geom.distances[i + 1] < s) i++;
+  const t = (s - geom.distances[i]) / Math.max(1e-9, geom.distances[i+1] - geom.distances[i]);
+  const positions = ribbon.roadGeometry.getAttribute('position');
+  // Vertex zero is the driver's right for the projection's compass convention.
+  const edge = new THREE.Vector3().fromBufferAttribute(positions, 2*i).lerp(new THREE.Vector3().fromBufferAttribute(positions, 2*(i+1)), t);
+  const center = geom.points[i].clone().lerp(geom.points[i+1], t);
+  const outward = edge.clone().sub(center).setY(0).normalize();
+  return { pos: edge.addScaledVector(outward, clearance), headingDeg: getWorldPosAtFrenet(geom, s, 0).headingDeg };
 }
