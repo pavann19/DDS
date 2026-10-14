@@ -1,0 +1,131 @@
+{
+  "scope": "actual realtime mapped session; simulated vehicle; in-process JSON consumers",
+  "seconds_requested": 30.0,
+  "consumers": 8,
+  "messages_received": [
+    301,
+    301,
+    301,
+    301,
+    301,
+    301,
+    301,
+    301
+  ],
+  "ml_ready": true,
+  "sim_time_s": 30.02,
+  "real_time_factor": 1.0001958344792339,
+  "stages": {
+    "perception": {
+      "count": 600,
+      "deadline_misses": 0,
+      "sample_count": 600,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 0.4030999989481643,
+      "p95_ms": 0.5776000034529716,
+      "p99_ms": 0.8044999995036051,
+      "max_ms": 3.7278999952832237
+    },
+    "planning": {
+      "count": 300,
+      "deadline_misses": 0,
+      "sample_count": 300,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 0.3073999978369102,
+      "p95_ms": 0.4149000014876947,
+      "p99_ms": 0.5110999918542802,
+      "max_ms": 0.6156000017654151
+    },
+    "control_safety_physics": {
+      "count": 1501,
+      "deadline_misses": 0,
+      "sample_count": 1501,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 1.1051999899791554,
+      "p95_ms": 7.764199996017851,
+      "p99_ms": 13.099500007228926,
+      "max_ms": 19.597399994381703
+    },
+    "clock": {
+      "count": 3002,
+      "deadline_misses": 0,
+      "sample_count": 2000,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 0.012099990271963179,
+      "p95_ms": 0.021799991372972727,
+      "p99_ms": 0.035200006095692515,
+      "max_ms": 0.229199999012053
+    },
+    "telemetry_build_dispatch": {
+      "count": 300,
+      "deadline_misses": 0,
+      "sample_count": 300,
+      "window_capacity": 2000,
+      "percentile_scope": "last_2000_stage_calls",
+      "p50_ms": 0.646999993477948,
+      "p95_ms": 1.109699995140545,
+      "p99_ms": 1.3927000109106302,
+      "max_ms": 3.493199998047203
+    }
+  },
+  "serialization": {
+    "count": 2408,
+    "p50_ms": 0.15999999595806003,
+    "p95_ms": 0.23700000019744039,
+    "p99_ms": 0.2820999943651259,
+    "max_ms": 0.7562999962829053
+  },
+  "scheduling_lateness": {
+    "count": 1012,
+    "p50_ms": 8.970099996076897,
+    "p95_ms": 15.642500002286397,
+    "p99_ms": 20.09360000374727,
+    "max_ms": 26.03850000014063
+  },
+  "largest_lateness_samples": [
+    {
+      "sim_time_s": 19.62,
+      "lateness_ms": 26.03850000014063
+    },
+    {
+      "sim_time_s": 26.72,
+      "lateness_ms": 25.7401000126265
+    },
+    {
+      "sim_time_s": 9.92,
+      "lateness_ms": 24.40960000967607
+    },
+    {
+      "sim_time_s": 16.22,
+      "lateness_ms": 23.97480000217911
+    },
+    {
+      "sim_time_s": 28.42,
+      "lateness_ms": 22.368300007656217
+    },
+    {
+      "sim_time_s": 21.32,
+      "lateness_ms": 22.11160000297241
+    },
+    {
+      "sim_time_s": 20.12,
+      "lateness_ms": 21.833099992363714
+    },
+    {
+      "sim_time_s": 3.22,
+      "lateness_ms": 21.79650000471156
+    },
+    {
+      "sim_time_s": 19.42,
+      "lateness_ms": 21.675500014680438
+    },
+    {
+      "sim_time_s": 21.62,
+      "lateness_ms": 20.25859999412205
+    }
+  ]
+}

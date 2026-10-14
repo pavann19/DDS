@@ -1,174 +1,130 @@
 # DDS — Driving Decision System
 
-A real-time driving decision support system that processes OBD-II vehicle telemetry to classify driving intent, detect anomalies, and visualise the driving experience through a 3D browser-based HMI.
+DDS is a real-road driving simulator with a browser-based 3D cockpit. Recorded OpenStreetMap geometry and OSRM routing are combined with a simulated vehicle, traffic, range sensors and eight rendered RGB cameras.
 
-![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python)
-![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi)
-![XGBoost](https://img.shields.io/badge/XGBoost-ML-orange)
-![Three.js](https://img.shields.io/badge/Three.js-3D-black?logo=three.js)
+Driving decisions belong to the planning, control and safety systems. XGBoost, SHAP and anomaly detection analyze internal vehicle readings; their labels and confidence do not command steering, acceleration or braking.
 
-## Overview
+## Current capabilities
 
-DDS takes real OBD-II telemetry data (speed, RPM, fuel rate, coolant temperature, CO₂ emissions) and builds a complete driving-decision inference pipeline:
+- One driving environment, with regression scenarios under Advanced testing.
+- Route planning, adjustable cruise speed, physical steering and wheel animation, indicators and camera previews.
+- Kinematic bicycle dynamics, steering-rate and friction limits, jerk-limited ordinary control, car following and independent safety overrides.
+- Joint longitudinal/lateral planning and modeled vehicle-footprint checks for turns and lane changes.
+- Eight scene-rendered RGB views with timestamped ingestion, stale-frame rejection and recovery holds. Classical pixel detection supports a bounded set of rendered traffic-control shapes.
+- Background traffic following physical ego/NPC bodies and bumper clearances; geometric range sensing and tracked simulated actors.
+- A server-owned simulation session and clock, WebSocket telemetry, reconnection and SQLite persistence.
 
-- **Driver-Behaviour Analytics** — XGBoost classifier over ego powertrain telemetry (RPM/CO₂/coolant/fuel-rate and deltas) labelling each timestep Accelerate / Decelerate / Maintain Speed, with real-time SHAP attribution (TreeExplainer @ 10 Hz) and an Isolation-Forest + range-check OOD detector. This is an **analytics / eco-efficiency channel scored on powertrain data — it does not drive the vehicle** (ADR-001 item 5): the model reads nothing about traffic, lanes or geometry, so control is a deterministic policy instead.
-- **Autonomy Stack** — deterministic cruise policy under hard physical constraints: Frenet-frame local planning + pure-pursuit lateral control, kinematic bicycle model with jerk-limited longitudinal control, IDM car-following, curvature/tracking-error speed caps, multi-agent trajectory **prediction + intent + proactive cut-in response** (Phase 7), and an independent Safety Shield.
-- **Real Road Routing** — OSRM-powered route following with centripetal Catmull-Rom path smoothing
-- **Simulated Traffic** — Server-side NPC vehicles with forward range sensing + 360° surround perception (multi-class EKF tracking, log-odds occupancy grid)
-- **3D Visualisation** — Tesla FSD-inspired browser HMI built with React Three Fiber, featuring chase camera, HUD, road geometry, and live sensor rays
+## Driving and analytics ownership
 
-## Architecture
-
-```
-OBD-II Telemetry (10 Hz)
-    │
-    ▼
-┌─────────────────────────────────────────┐
-│  Inference Service (FastAPI + WebSocket) │
-│                                         │
-│  ┌──────────┐  ┌──────────┐  ┌───────┐ │
-│  │ XGBoost  │  │ Anomaly  │  │ SHAP  │ │
-│  │Classifier│  │ Detector │  │Explain│ │
-│  └────┬─────┘  └────┬─────┘  └───┬───┘ │
-│       └──────┬───────┘            │     │
-│              ▼                    │     │
-│     Confidence Gate ◄─────────────┘     │
-│              │                          │
-│              ▼                          │
-│     Physics Engine                      │
-│     (Bicycle + Frenet + Pure Pursuit)   │
-│              │                          │
-│              ▼                          │
-│     WebSocket Stream (10 Hz)            │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌──────────────────────────────────────┐
-│  3D Browser HMI (Next.js + Three.js) │
-│  Road · Car · Traffic · HUD · SHAP  │
-└──────────────────────────────────────┘
+```mermaid
+flowchart LR
+    World[Simulated vehicle and mapped world] --> Sensors[Simulated range sensors]
+    World --> Scene[Browser 3D scene]
+    Scene --> RGB[Eight captured RGB views]
+    Sensors --> Driver[Perception and intelligent controller]
+    RGB --> Driver
+    Driver --> Planner[Trajectory planning and tracking]
+    Planner --> Safety[Independent safety checks]
+    Safety --> Actuators[Steering and acceleration commands]
+    Actuators --> World
+    World --> Readings[Internal vehicle readings]
+    Readings --> Analytics[XGBoost, SHAP and anomaly analytics]
+    Analytics --> HMI[Operator interface]
+    World --> HMI
 ```
 
-## Project Structure
+Map geometry and control-location priors are not live obstacle sensing. Ego traffic-light phases come from captured pixels in scene-camera mode. Background actors use simulator world state separately from the ego controller.
 
-```
-DDS/
-├── app/                        # Backend (FastAPI)
-│   ├── api/
-│   │   ├── rest.py             # REST endpoints (/api/health, /api/predict)
-│   │   └── websockets.py       # WebSocket streaming loop
-│   ├── core/
-│   │   ├── config.py           # App configuration
-│   │   └── database.py         # SQLite telemetry storage
-│   ├── services/
-│   │   ├── anomaly_detector.py # Isolation Forest + range checks
-│   │   ├── driver_scoring.py   # Driver behaviour scoring
-│   │   ├── explainability.py   # SHAP TreeExplainer
-│   │   ├── frenet.py           # Frenet frame projection
-│   │   ├── inference.py        # ML inference + confidence gate
-│   │   ├── path_smoothing.py   # Catmull-Rom route smoothing
-│   │   ├── physics_engine.py   # Kinematic bicycle model + control
-│   │   ├── planner.py          # Lateral offset planner
-│   │   ├── routing.py          # OSRM route fetching
-│   │   └── traffic.py          # NPC traffic simulation
-│   └── main.py                 # App entrypoint
-├── frontend/                   # Frontend (Next.js + Three.js)
-│   └── src/app/
-│       ├── components/
-│       │   ├── DriveScene.tsx   # 3D driving scene
-│       │   ├── DriveHUD.tsx     # Speed/gear/turn HUD overlay
-│       │   ├── SimulatedTraffic.tsx
-│       │   ├── SHAPPanel.tsx    # Live SHAP visualisation
-│       │   └── ...
-│       └── page.tsx             # Main dashboard page
-├── tests/                      # Backend test suite (pytest)
-├── data_prep.py                # Dataset preprocessing
-├── model_pipeline.py           # Model training & evaluation
-├── genetic_optimizer.py        # Feature subset selection
-├── baselines.py                # Baseline model comparisons
-├── robustness_eval.py          # OOD robustness evaluation
-├── OBD_2_dataset.csv           # Raw OBD-II telemetry dataset
-└── requirements.txt            # Python dependencies
-```
+## Validation snapshot — 14 October 2026
 
-## Getting Started
+- Backend regression: **1,223 passed, 3 skipped**. Skips cover CARLA collection and two Starlette TestClient WebSocket teardown cases.
+- Native frontend production build passed.
+- An uninterrupted default mission ran from station zero through the sharp bend and both signals to mapped parking: **5,490 telemetry samples, zero recorded ego overlaps or road-boundary failures**, parked at exactly zero speed.
+- Browser reload preserved simulation identity, epoch, parked pose and zero speed across 151 recorded samples.
 
-### Prerequisites
+This is one recorded route, seed and configuration with medium eight-NPC traffic and a 50 km/h cruise preference. It is not a success-rate estimate, physical-car validation or general Level 5 autonomy. The live drive still contained 183 camera-recovery and 29 stale-camera active samples. Telemetry sampled at 10 Hz is not exhaustive continuous collision certification.
 
-- Python 3.13+
-- Node.js 18+
-- npm
+See the [acceptance report](docs/DDS_CRITICAL_FIX_ACCEPTANCE_2026-10-14.md) for source commits, failed runs, scope and evidence locations. Raw runtime logs and screenshots referenced there are local artifacts and are not all included in this repository.
 
-### Backend Setup
+## Run locally
 
-```bash
-# Create virtual environment
+Use **Python 3.13**, **Node.js 20.9 or newer**, and npm. The frontend pins **Next.js 16.4.0** and **React 19.2.4**. Backend dependencies are pinned in `requirements.txt`.
+
+From the repository root:
+
+```sh
 python -m venv venv
-
-# Activate (Windows)
-venv\Scripts\activate
-# Activate (Linux/Mac)
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Train the model (generates .pkl artifacts)
-python model_pipeline.py
-
-# Start the backend server
-python -m app.main
 ```
 
-The backend starts at `http://localhost:8000`. Verify with:
-```bash
-curl http://localhost:8000/api/health
+Activate with `venv\Scripts\Activate.ps1` in PowerShell, or `source venv/bin/activate` on Linux/macOS. Then:
+
+```sh
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-### Frontend Setup
+Checked-in trained artifacts support internal-reading analytics. Model training is a separate workflow, not a startup step. Health endpoint: <http://127.0.0.1:8000/api/health>.
 
-```bash
+Create `frontend/.env.local` with:
+
+```dotenv
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_WS_URL=ws://127.0.0.1:8000/ws/telemetry
+```
+
+In a second terminal:
+
+```sh
 cd frontend
-npm install
-npm run dev
+npm ci
+npx next dev --hostname 127.0.0.1 --port 3000
 ```
 
-The frontend starts at `http://localhost:3000`.
+Open <http://127.0.0.1:3000>. The default environment starts paused; select **Resume drive**. Map, routing and geocoding providers require network access. Recorded fallback coverage is partial and labeled. For a local production build, run `npm run build`, then `npm run start -- --hostname 127.0.0.1 --port 3000`.
 
-### Running Tests
+## Checks
 
-```bash
-# Backend tests
-pip install -r requirements-dev.txt
-pytest tests/ -v
+With the Python environment active, from the repository root:
 
-# Frontend type check
-cd frontend && npx tsc --noEmit
+```sh
+python -m pip install -r requirements-dev.txt
+python -m pytest tests/ -q
 ```
 
-## Tech Stack
+From `frontend`:
 
-| Layer | Technology |
-|-------|-----------|
-| ML Pipeline | XGBoost, scikit-learn, SHAP |
-| Backend | FastAPI, WebSocket, SQLite |
-| Physics | Custom kinematic bicycle model |
-| Routing | OSRM (public demo API) |
-| Frontend | Next.js 15, React Three Fiber, Three.js |
-| UI | Tailwind CSS, Framer Motion |
-| Testing | pytest, pytest-asyncio |
-| CI | GitHub Actions |
+```sh
+npx tsc --noEmit
+npm run build
+```
 
-## Dataset
+While the backend and browser are running:
 
-The system uses a real OBD-II telemetry dataset (`OBD_2_dataset.csv`) containing ~900 timestamped readings with:
-- Vehicle speed, RPM, fuel consumption rate
-- Coolant temperature, CO₂ emissions
-- Derived delta features (speed change, RPM change, etc.)
+```sh
+python scripts/capture_live_diagnostics.py --url ws://127.0.0.1:8000/ws/telemetry --seconds 900 --until-parked --output output/manual-drive.json
+```
 
-The driving decision label is derived from a ±2 km/h speed delta threshold, classifying each timestep as Accelerate, Decelerate, or Maintain Speed.
+The recorder rejects observed ego overlaps and road-containment failures. A timeout, missing observation or skipped integration is not a passing journey. Backend tests complement actual browser/RGB/transport checks.
 
-## License
+## Repository guide
 
-This project is developed as an academic research project.
+| Path | Purpose |
+|---|---|
+| `app/services/simulation_session.py` | Simulation lifecycle, scheduling and command ownership |
+| `app/services/driver/` and `app/services/planner/` | Driving decisions, planning and tracking |
+| `app/services/physics_engine.py` and `app/services/traffic.py` | Vehicle and background-world dynamics |
+| `app/services/control_camera.py` and `app/services/scene_camera_ingress.py` | Pixel detection and timestamped RGB ingestion |
+| `frontend/src/components/3d/` | Scene, vehicle and camera rendering |
+| `frontend/src/store/` and `frontend/src/workers/` | Browser state and telemetry/camera transport |
+| `app/data/` | Attributed recorded map and mission data |
+| `scripts/` and `tests/` | Evaluation tools and regressions |
+
+## Known limits and next work
+
+Camera GPU/transport timing tails still cause holds. General camera/range object-track fusion remains unfinished. Road corridors, stop lines, parking poses and missing building details contain modeled assumptions. Bridges and railways lack complete elevation fidelity. NPCs lack general intersection negotiation. Arbitrary destinations do not inherit the default mission's complete infrastructure validation.
+
+The running vehicle, sensors, weather and traffic are simulated. The offline OBD-II dataset and analytics artifacts do not establish a live physical OBD-II connection. This repository does not establish physical autonomy or production readiness.
+
+## Data and licensing
+
+OpenStreetMap-derived records retain attribution and provenance; see [map-data notes](app/data/README.md). There is currently no repository-wide software license file. Public availability does not substitute for a license grant.

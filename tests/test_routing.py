@@ -146,3 +146,36 @@ async def test_get_route_returns_none_on_http_error_status(monkeypatch):
     )
     result = await routing.get_route(37.7749, -122.4194, 37.8199, -122.4783)
     assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('payload', [[], {'code':'Ok','routes':[{}]}, {'code':'Ok','routes':[{'geometry':{'coordinates':[[0,0],[float('nan'),1]]}}]}])
+async def test_malformed_upstream_routes_fail_closed(monkeypatch, payload):
+    monkeypatch.setattr(routing.httpx, 'AsyncClient', lambda *a, **k: _FakeAsyncClient(response=_FakeResponse(payload)))
+    assert await routing.get_route(0,0,1,1) is None
+
+
+@pytest.mark.asyncio
+async def test_nearby_destinations_do_not_share_route_and_cache_is_isolated(monkeypatch):
+    calls=[]
+    class Client(_FakeAsyncClient):
+        async def get(self, url, params=None):
+            calls.append(url)
+            return _FakeResponse(_osrm_ok_payload())
+    monkeypatch.setattr(routing.httpx, 'AsyncClient', lambda *a, **k: Client())
+    first=await routing.get_route(37.7749,-122.4194,37.819901,-122.4783)
+    first[0].clear()
+    again=await routing.get_route(37.7749,-122.4194,37.819901,-122.4783)
+    assert len(again[0])==3
+    await routing.get_route(37.7749,-122.4194,37.819909,-122.4783)
+    assert len(calls)==2
+
+
+@pytest.mark.asyncio
+async def test_invalid_maneuver_metadata_does_not_invent_a_control_location(monkeypatch):
+    payload=_osrm_ok_payload()
+    payload['routes'][0]['legs'][0]['steps']=[{'maneuver':{}}, {'name':{},'maneuver':{'location':[0,0]}}, {'distance':float('nan'),'maneuver':{'location':[0,0]}}]
+    monkeypatch.setattr(routing.httpx,'AsyncClient',lambda *a, **k:_FakeAsyncClient(response=_FakeResponse(payload)))
+    result=await routing.get_route(0,0,1,1)
+    assert len(result[0])==3
+    assert result[1]==[]

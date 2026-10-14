@@ -1,12 +1,17 @@
 import type { Metadata } from "next";
+import { Outfit, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { CommandPalette } from "../components/CommandPalette";
+
+const outfit = Outfit({ subsets: ["latin"], weight: ["400", "500", "600", "700", "800"], variable: "--font-outfit", display: "swap" });
+const inter = Inter({ subsets: ["latin"], weight: ["300", "400", "500", "600", "700"], variable: "--font-inter", display: "swap" });
+const jetbrains = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-jetbrains", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "DDS Autopilot Dashboard",
-  description: "Driving Decision Strategy — Real-time telemetry dashboard powered by XGBoost and exhaustive feature optimization.",
+  title: "DDS Drive",
+  description:
+    "A clear view of your drive. Vehicle information, navigation, surroundings and safety status in one driving cockpit.",
 };
-
-import { CommandPalette } from "../components/CommandPalette";
 
 export default function RootLayout({
   children,
@@ -14,12 +19,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="font-sans antialiased bg-background text-foreground flex">
+    <html lang="en" className={`${outfit.variable} ${inter.variable} ${jetbrains.variable}`}>
+      <body className="font-sans antialiased bg-background text-foreground">
         <CommandPalette />
-        <main className="flex-1 h-screen overflow-hidden">
-          {children}
-        </main>
+        <div className="h-screen overflow-hidden">{children}</div>
       </body>
     </html>
   );

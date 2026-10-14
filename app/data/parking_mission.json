@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "source": "OpenStreetMap contributors / OSRM",
+  "source_url": "https://router.project-osrm.org/route/v1/driving/-122.365383,37.592646;-122.3617587,37.5922103?overview=full&geometries=geojson&steps=true&bearings=;34,25",
+  "source_sha256": "c6430fb47d906234eb145a2491f9f9c948192612616cc7cbec149a121a954309",
+  "recorded_date": "2026-10-11",
+  "lot_way_id": 1356718570,
+  "aisle_way_id": 499187289,
+  "aisle_start_node": "4904960211",
+  "aisle_end_node": "4904960208",
+  "side": -1,
+  "approach": [
+    [
+      37.592646,
+      -122.365383
+    ],
+    [
+      37.591906,
+      -122.364458
+    ],
+    [
+      37.591168,
+      -122.363426
+    ],
+    [
+      37.590883,
+      -122.363033
+    ],
+    [
+      37.590589,
+      -122.362641
+    ],
+    [
+      37.590387,
+      -122.362359
+    ],
+    [
+      37.590097,
+      -122.361917
+    ],
+    [
+      37.59005,
+      -122.361847
+    ],
+    [
+      37.589943,
+      -122.361677
+    ],
+    [
+      37.590604,
+      -122.361292
+    ],
+    [
+      37.590905,
+      -122.361078
+    ],
+    [
+      37.591044,
+      -122.360931
+    ],
+    [
+      37.591199,
+      -122.360766
+    ],
+    [
+      37.591365,
+      -122.360908
+    ],
+    [
+      37.591427,
+      -122.361037
+    ],
+    [
+      37.591657,
+      -122.361519
+    ],
+    [
+      37.591918,
+      -122.362064
+    ],
+    [
+      37.591966,
+      -122.362024
+    ],
+    [
+      37.592182,
+      -122.361845
+    ],
+    [
+      37.59221,
+      -122.361759
+    ]
+  ],
+  "maneuver_length_m": 35,
+  "transition_length_m": 30,
+  "offset_m": 5,
+  "parking_pose_source": "planner_selected_pose_inside_recorded_parking_area",
+  "occupancy_source": "simulated_surround_sensors",
+  "access_status": "not_tagged_restricted_in_recorded_map_not_live_verified",
+  "approach_sha256": "cf9aa14435be42dbfab783829c4e63c6e8108546acf512477e44ded5c8a0c875"
+}

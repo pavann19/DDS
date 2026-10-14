@@ -85,6 +85,12 @@ async def test_analytics_summary_with_no_data_returns_sane_defaults(api_client):
     assert body["total_sessions"] == 0
     assert body["total_predictions"] == 0
     assert body["recent_anomalies"] == []
+    assert body['avg_driver_score'] is None
+
+
+async def test_summary_preserves_a_real_zero_score(api_client,test_db_session):
+    await _seed_session(test_db_session,session_id='zero-score',avg_score=0.)
+    assert (await api_client.get('/api/analytics/summary')).json()['avg_driver_score']==0.
 
 
 async def test_analytics_summary_aggregates_seeded_sessions(api_client, test_db_session):

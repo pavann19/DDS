@@ -77,6 +77,8 @@ def test_sensor_observation_carries_only_permitted_fields():
     assert field_names == {
         "clock", "ego", "lead", "adjacent_lane_clear",
         "surround_tracks", "occupancy", "frenet_frame",
+        "safety_detections", "safety_measurement_age_s",
+        "road_rules", "traffic_controls", "parking", "sensor_health",
     }
     assert obs.surround_tracks == ()
     assert obs.occupancy is None

@@ -40,7 +40,7 @@ def dimensions_for(entity_class: EntityClass) -> Tuple[float, float, float]:
     return ENTITY_DIMENSIONS_M[entity_class]
 
 
-@dataclass
+@dataclass(slots=True)
 class DetectedEntity:
     """One sensor detection for one tick -- the tracker's raw input. Not a
     persistent track; tracker.py owns track identity/lifecycle across

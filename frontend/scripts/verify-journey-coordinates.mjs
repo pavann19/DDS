@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {mapJourneyPoint,parseJourneyPoint} from '../src/lib/journeyCoordinates.ts';
+const positive=mapJourneyPoint({lat:17.346175,lng:798.550923});
+assert.ok(Math.abs(positive.lng-78.550923)<1e-9);
+assert.equal(positive.lat,17.346175);
+assert.ok(Math.abs(mapJourneyPoint({lat:17,lng:-641.449077}).lng-78.550923)<1e-9);
+assert.equal(mapJourneyPoint({lat:90,lng:180}).lng,180);
+assert.equal(mapJourneyPoint({lat:91,lng:1}),null);
+assert.equal(mapJourneyPoint({lat:1,lng:Infinity}),null);
+assert.equal(parseJourneyPoint('17.346175, 798.550923'),null);
+assert.equal(parseJourneyPoint(', 78'),null);
+assert.equal(parseJourneyPoint('17, NaN'),null);
+assert.deepEqual(parseJourneyPoint('17.346175,78.550923'),{lat:17.346175,lng:78.550923});
+console.log('Repeated-world map clicks normalized; explicit invalid coordinates remain rejected.');

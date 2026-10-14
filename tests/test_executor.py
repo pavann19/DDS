@@ -64,6 +64,27 @@ def test_base_hz_is_one_hundred():
     assert BASE_HZ == 100.0
 
 
+@pytest.mark.parametrize('value', [0, -1, True, float('nan'), float('inf')])
+def test_invalid_base_and_stage_rates_rejected(value):
+    with pytest.raises(ValueError):
+        MultiRateExecutor(base_hz=value)
+    with pytest.raises(ValueError):
+        MultiRateExecutor().add_stage('invalid',value,lambda clk:None)
+
+
+def test_duplicate_stage_cannot_double_execute_or_overwrite_metrics():
+    executor=MultiRateExecutor()
+    executor.add_stage('control',50,lambda clk:None)
+    with pytest.raises(ValueError):
+        executor.add_stage('control',50,lambda clk:None)
+
+
+@pytest.mark.parametrize('value', [-1, True, float('nan'), float('inf')])
+def test_invalid_run_duration_rejected(value):
+    with pytest.raises(ValueError):
+        MultiRateExecutor().run_for(value)
+
+
 # --- PhysicsEngine seeded-RNG determinism (partial; full gate = item 8) ---
 
 def _run_seeded(seed, ticks=120):

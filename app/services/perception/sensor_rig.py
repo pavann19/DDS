@@ -22,6 +22,7 @@ of forward, range (-180, 180], matching the project's existing right-handed
 d/right convention.
 """
 import math
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -59,7 +60,7 @@ def _wrap_deg(angle_deg: float) -> float:
     return 180.0 if a == -180.0 else a
 
 
-@dataclass
+@dataclass(slots=True)
 class RelativeObservation:
     range_m: float
     azimuth_deg: float  # relative to ego forward, see module docstring
@@ -151,19 +152,23 @@ def batch_relative_observations(
     return range_m, azimuth_deg
 
 
+@lru_cache(maxsize=16)
+def _rig_arrays(rig):
+    arrays = tuple(np.asarray(values, dtype=float) for values in (
+        [f.range_m for f in rig], [f.center_azimuth_deg for f in rig], [f.fov_deg/2 for f in rig]))
+    for array in arrays:
+        array.flags.writeable = False
+    return arrays
+
+
+def batch_frustum_membership(range_m, azimuth_deg, rig: Tuple[SensorFrustum, ...] = SENSOR_RIG):
+    """Actor-by-sensor membership, reused for detection and sensor names."""
+    ranges, centers, half_fov = _rig_arrays(rig)
+    distance = np.asarray(range_m, dtype=float)[:, None]
+    azimuth = np.asarray(azimuth_deg, dtype=float)[:, None]
+    wrapped = (azimuth - centers + 180.0) % 360.0 - 180.0
+    return (distance <= ranges) & (np.abs(wrapped) <= half_fov)
+
+
 def batch_detecting_mask(range_m, azimuth_deg, rig: Tuple[SensorFrustum, ...] = SENSOR_RIG):
-    """Vectorized is_detected for many actors at once: a boolean array,
-    True where ANY frustum in the rig sees that actor. Same rule as
-    frustum_contains (range cutoff + wrapped-azimuth half-FOV check), just
-    evaluated once per frustum across every actor instead of once per
-    (actor, frustum) pair via nested Python-level calls."""
-    range_m = np.asarray(range_m, dtype=float)
-    azimuth_deg = np.asarray(azimuth_deg, dtype=float)
-    detected = np.zeros(range_m.shape, dtype=bool)
-    for f in rig:
-        diff = azimuth_deg - f.center_azimuth_deg
-        wrapped = (diff + 180.0) % 360.0 - 180.0
-        in_fov = np.abs(wrapped) <= (f.fov_deg / 2.0)
-        in_range = range_m <= f.range_m
-        detected |= (in_fov & in_range)
-    return detected
+    return np.any(batch_frustum_membership(range_m, azimuth_deg, rig), axis=1)

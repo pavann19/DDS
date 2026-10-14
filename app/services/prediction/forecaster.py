@@ -38,6 +38,11 @@ from app.services.interfaces import AgentPrediction, PredictedState
 
 DEFAULT_HORIZON_S = 3.0
 DEFAULT_STEP_S = 0.1
+
+# Half of a typical tracker finite-difference travel distance over one
+# prediction tick -- project_agent_frenet averages the route tangent back
+# this far so a faithful curve-follower's Frenet lateral drift stays ~0.
+_TANGENT_AVG_LOOKBACK_M = 3.0
 # Sub-step for the midpoint integrator; DEFAULT_STEP_S must be an integer
 # multiple of it.
 _INTERNAL_STEP_S = 0.05
@@ -233,7 +238,22 @@ def project_agent_frenet(
     "cut-in" on every bend (Gate 7.3).
     """
     s, d, idx = _project_xz_to_frenet(frame, x, z, hint_idx=hint_idx, window=window)
-    _, _, dir_x, dir_z = frenet_to_local_xz(frame, s, 0.0)
+    # Resolve the velocity onto the tangent AVERAGED over the ~few metres the
+    # agent just travelled, not the tangent exactly at the current station.
+    # The tracker's (vx, vz) is a finite difference over the preceding
+    # interval, during which the road tangent rotated by ~kappa * ds. Using
+    # only the tangent at s therefore charges a faithful curve-follower a
+    # spurious lateral drift v_d ~= |v| * kappa * ds / 2 -- small, but enough
+    # to read as a cut-in on tighter bends (integration-path Gate 7.3 gap).
+    _, _, dir_x0, dir_z0 = frenet_to_local_xz(frame, s, 0.0)
+    s_back = max(0.0, s - _TANGENT_AVG_LOOKBACK_M)
+    _, _, dir_xb, dir_zb = frenet_to_local_xz(frame, s_back, 0.0)
+    dir_x, dir_z = dir_x0 + dir_xb, dir_z0 + dir_zb
+    _n = math.hypot(dir_x, dir_z)
+    if _n < 1e-9:
+        dir_x, dir_z = dir_x0, dir_z0
+    else:
+        dir_x, dir_z = dir_x / _n, dir_z / _n
     right_x, right_z = dir_z, -dir_x
     v_s = vx * dir_x + vz * dir_z
     v_d = vx * right_x + vz * right_z

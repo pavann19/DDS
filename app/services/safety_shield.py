@@ -27,6 +27,7 @@ Three concrete, physically-grounded checks -- not a general policy engine:
      than a comfort-tuned cruise/planning layer).
 """
 from dataclasses import dataclass, field
+import math
 from typing import List, Optional
 
 from app.services.planner import ROAD_HALF_WIDTH_M
@@ -39,6 +40,14 @@ from app.services.planner import ROAD_HALF_WIDTH_M
 # a car that's already braking correctly.
 TTC_CRITICAL_S = 2.0
 TTC_WARNING_S = 4.0
+
+# Hard bumper-to-bumper proximity floor. Independent of TTC: if the ego
+# is this close to the vehicle ahead and still moving toward it, brake
+# NOW -- TTC can read None (noise flips closing speed negative) or a
+# comfortable value (tiny gap, slow closing) while the ego still creeps
+# into the car. sensed_lead_gap_m is bumper-to-bumper
+# (traffic.sense_lead_vehicle subtracts both half-lengths).
+HARD_MIN_LEAD_GAP_M = 1.2
 
 # Distinct from planner.py's ROAD_HALF_WIDTH_M usage as a candidate-scoring
 # input -- this is "has the car actually left the road", checked against
@@ -81,6 +90,10 @@ class ShieldVerdict:
     reasons: List[str] = field(default_factory=list)
     override_action: Optional[str] = None
     ttc_s: Optional[float] = None
+    overlap_detected: bool = False
+    body_contained: bool = True
+    swept_body_contained: bool = True
+    footprint_collision_risk: bool = False
 
 
 def _risk_rank(level: str) -> int:
@@ -110,6 +123,10 @@ def evaluate(
     lateral_accel_mps2: float,
     sensed_lead_gap_m: Optional[float],
     sensed_lead_speed_mps: Optional[float],
+    heading_error_rad: float = 0.0,
+    vehicle_width_m: float = 1.8,
+    vehicle_length_m: float = 4.8,
+    motion_heading_error_rad: Optional[float] = None,
 ) -> ShieldVerdict:
     """The independent check. Called every tick, after the planner and IDM
     have already produced their decision -- this never influences THEIR
@@ -118,6 +135,15 @@ def evaluate(
     way it already composes cruise/IDM: min() with whatever else was
     decided, so the shield can only ever make the car brake harder than
     planned, never accelerate harder)."""
+    values = (ego_speed_mps, lateral_offset_m, lateral_accel_mps2,
+              sensed_lead_gap_m, sensed_lead_speed_mps, heading_error_rad,
+              vehicle_width_m, vehicle_length_m, motion_heading_error_rad)
+    if vehicle_width_m <= 0 or vehicle_length_m <= 0 or any(v is not None and not math.isfinite(v) for v in values):
+        return ShieldVerdict(
+            approved=False, risk_level=RISK_CRITICAL,
+            reasons=["Invalid non-finite safety input"],
+            override_action=OVERRIDE_EMERGENCY_BRAKE,
+        )
     reasons: List[str] = []
     risk = RISK_NONE
     override: Optional[str] = None
@@ -132,6 +158,27 @@ def evaluate(
             return
         override = action
 
+    overlap = sensed_lead_gap_m is not None and sensed_lead_gap_m <= 0.0
+    if overlap:
+        risk = RISK_CRITICAL
+        reasons.append("Detected lead occupied-space overlap")
+        _request_override(OVERRIDE_EMERGENCY_BRAKE)
+
+    # Hard proximity guard -- runs BEFORE the TTC path so a noise-driven
+    # None TTC cannot let the ego coast into a near-touching lead.
+    if (
+        sensed_lead_gap_m is not None
+        and sensed_lead_gap_m < HARD_MIN_LEAD_GAP_M
+        and ego_speed_mps > 0.3
+        and (sensed_lead_speed_mps is None or ego_speed_mps > sensed_lead_speed_mps + 0.1)
+    ):
+        risk = _worse(risk, RISK_CRITICAL)
+        reasons.append(
+            f"Lead vehicle {sensed_lead_gap_m:.1f} m ahead (bumper-to-bumper) and closing "
+            f"-- below the hard {HARD_MIN_LEAD_GAP_M} m floor"
+        )
+        _request_override(OVERRIDE_EMERGENCY_BRAKE)
+
     ttc_s = compute_ttc_s(sensed_lead_gap_m, ego_speed_mps, sensed_lead_speed_mps)
     if ttc_s is not None:
         if ttc_s < TTC_CRITICAL_S:
@@ -142,10 +189,20 @@ def evaluate(
             risk = _worse(risk, RISK_MEDIUM)
             reasons.append(f"Time-to-collision {ttc_s:.1f}s below warning threshold ({TTC_WARNING_S}s)")
 
-    if abs(lateral_offset_m) > ROAD_BOUNDARY_HARD_LIMIT_M:
+    lateral_half_extent = (abs(math.cos(heading_error_rad)) * vehicle_width_m
+                           + abs(math.sin(heading_error_rad)) * vehicle_length_m) / 2.0
+    # Short constant-heading sweep catches outward motion before the body
+    # crosses the local modeled corridor edge. Curved-map uncertainty remains.
+    # Body orientation sets the rectangle support. Center translation uses
+    # velocity heading (body yaw + beta in the center bicycle), separately.
+    motion_error = heading_error_rad if motion_heading_error_rad is None else motion_heading_error_rad
+    future_offset = lateral_offset_m - ego_speed_mps * math.sin(motion_error) * 0.1
+    body_contained = abs(lateral_offset_m) + lateral_half_extent <= ROAD_BOUNDARY_HARD_LIMIT_M
+    swept_body_contained = max(abs(lateral_offset_m), abs(future_offset)) + lateral_half_extent <= ROAD_BOUNDARY_HARD_LIMIT_M
+    if not swept_body_contained:
         risk = _worse(risk, RISK_CRITICAL)
         reasons.append(
-            f"Lateral offset {lateral_offset_m:.1f}m exceeds the modelled road half-width "
+            f"Vehicle footprint at lateral offset {lateral_offset_m:.1f}m exceeds the modelled road half-width "
             f"({ROAD_BOUNDARY_HARD_LIMIT_M}m) -- the car has left the road"
         )
         # RECOVER_LOW_SPEED, not EMERGENCY_BRAKE: braking to a full stop
@@ -165,4 +222,6 @@ def evaluate(
 
     approved = override is None
     return ShieldVerdict(approved=approved, risk_level=risk, reasons=reasons,
-                         override_action=override, ttc_s=ttc_s)
+                         override_action=override, ttc_s=ttc_s,
+                         overlap_detected=overlap, body_contained=body_contained,
+                         swept_body_contained=swept_body_contained)

@@ -16,17 +16,23 @@ export function toLocalXZ(lat: number, lng: number, originLat: number, originLng
 }
 
 export interface RouteGeometry {
+  /** Authoritative backend centreline points, without a second smoothing pass. */
   points: THREE.Vector3[];
-  distances: number[]; // cumulative arc length (metres), same length as points
+  /** Unit forward tangent at each sample (continuous through corners). */
+  tangents: THREE.Vector3[];
+  /** Cumulative arc length (metres), same length as `points`. */
+  distances: number[];
   totalLength: number;
   originLat: number;
   originLng: number;
 }
 
-/** Builds a local-frame route geometry from real [lat, lng] waypoints
- * (the backend's spline-smoothed route, streamed once per destination --
- * app/api/websockets.py's "route" message). Returns null if there's
- * nothing usable yet (route not fetched, or degenerate). */
+// Physics owns path smoothing. A second spline here changes stations and
+// roadside positions near corners, breaking camera/map association.
+
+/** Builds a smoothed local-frame route geometry from real [lat, lng]
+ * waypoints (app/api/websockets.py's "route" message). Returns null if
+ * there's nothing usable yet. */
 export function buildRouteGeometry(waypoints: [number, number][]): RouteGeometry | null {
   if (!waypoints || waypoints.length < 2) return null;
   const [originLat, originLng] = waypoints[0];
@@ -34,16 +40,21 @@ export function buildRouteGeometry(waypoints: [number, number][]): RouteGeometry
   const rawPoints = waypoints
     .filter((p) => p && typeof p[0] === 'number' && typeof p[1] === 'number')
     .map(([lat, lng]) => toLocalXZ(lat, lng, originLat, originLng))
-    .filter((p) => !isNaN(p.x) && !isNaN(p.z));
+    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.z));
   if (rawPoints.length < 2) return null;
 
-  // De-dupe near-identical points -- a near-zero-length segment produces a
-  // degenerate/NaN tangent direction in getPathPosAtStation below.
-  const points: THREE.Vector3[] = [rawPoints[0]];
+  // De-dupe near-identical points -- a near-zero-length segment gives the
+  // spline a degenerate control point and a NaN tangent.
+  const ctrl: THREE.Vector3[] = [rawPoints[0]];
   for (let i = 1; i < rawPoints.length; i++) {
-    if (rawPoints[i].distanceTo(points[points.length - 1]) > 0.1) points.push(rawPoints[i]);
+    if (rawPoints[i].distanceTo(ctrl[ctrl.length - 1]) > 1e-6) ctrl.push(rawPoints[i]);
   }
-  if (points.length < 2) return null;
+  if (ctrl.length < 2) return null;
+
+  const points = ctrl;
+  const tangents = points.map((_, i) => new THREE.Vector3()
+    .subVectors(points[Math.min(points.length-1,i+1)], points[Math.max(0,i-1)])
+    .setY(0).normalize());
 
   const distances = [0];
   let totalLength = 0;
@@ -52,18 +63,17 @@ export function buildRouteGeometry(waypoints: [number, number][]): RouteGeometry
     distances.push(totalLength);
   }
 
-  return { points, distances, totalLength, originLat, originLng };
+  return { points, tangents, distances, totalLength, originLat, originLng };
 }
 
-/** Position + forward tangent direction at a given station (arc-length
- * metres along the route). Mirrors app/services/frenet.py's
- * frenet_to_local_xz() -- same station-latitude parameterisation, so a
- * given `s` means the same physical point on both sides. */
+/** Position + forward tangent at a given station (arc-length metres). The
+ * tangent comes from the smoothed curve, so it rotates continuously
+ * through every corner instead of snapping between polyline segments. */
 export function getPathPosAtStation(
   geom: RouteGeometry,
   station: number,
 ): { pos: THREE.Vector3; dir: THREE.Vector3 } {
-  const { points, distances, totalLength } = geom;
+  const { points, tangents, distances, totalLength } = geom;
   if (totalLength === 0) return { pos: points[0].clone(), dir: new THREE.Vector3(0, 0, -1) };
 
   const s = Math.max(0, Math.min(station, totalLength));
@@ -74,12 +84,15 @@ export function getPathPosAtStation(
   const end = points[idx + 1] ?? points[idx];
   const startDist = distances[idx];
   const endDist = distances[idx + 1] ?? startDist;
-
   const segLen = endDist - startDist;
   const t = segLen > 1e-9 ? (s - startDist) / segLen : 0;
 
   const pos = new THREE.Vector3().lerpVectors(start, end, t);
-  const dir = new THREE.Vector3().subVectors(end, start).normalize();
+  const dir = new THREE.Vector3()
+    .lerpVectors(tangents[idx], tangents[idx + 1] ?? tangents[idx], t)
+    .setY(0);
+  if (dir.lengthSq() < 1e-9) dir.subVectors(end, start);
+  dir.normalize();
   return { pos, dir };
 }
 
@@ -93,18 +106,15 @@ export interface RoadRibbon {
   halfWidth: number;
 }
 
-/** Builds a real road-surface ribbon mesh + lane-marking polylines from the
- * route geometry, so the rendered road actually shows the real route's
- * turns instead of a generic straight strip. Ported from the pre-P6-2
- * frontend's RoadMesh (frontend/src/app/components/DriveScene.tsx), which
- * solved the same "road folds/self-intersects at sharp turns" problem this
- * would otherwise hit: a naive symmetric perpendicular offset stretches by
- * 1/cos(turnAngle/2) and blows up approaching a hairpin. Clamping the miter
- * scale (the same fix SVG/Cairo stroke rendering uses via
- * stroke-miterlimit) keeps every offset vertex bounded through turns of
- * any sharpness. */
-export function buildRoadRibbon(geom: RouteGeometry, halfWidth = 7): RoadRibbon {
-  const MITER_LIMIT = 2.0;
+/** Builds the road-surface ribbon + lane-marking polylines. With the
+ * centreline now densely sampled and smooth, consecutive segments turn by
+ * a fraction of a degree, so the perpendicular offset never blows up --
+ * the miter clamp is kept only as a belt-and-braces guard for any
+ * residual kink. Default width is a real 4-lane cross-section (~17.6 m). */
+export const MODELED_ROAD_HALF_WIDTH_M = 8.8;
+
+export function buildRoadRibbon(geom: RouteGeometry, halfWidth = MODELED_ROAD_HALF_WIDTH_M): RoadRibbon {
+  const MITER_LIMIT = 3.0;
   const { points } = geom;
 
   const vertices: number[] = [];
@@ -148,17 +158,20 @@ export function buildRoadRibbon(geom: RouteGeometry, halfWidth = 7): RoadRibbon 
     vertices.push(leftVert.x, leftVert.y, leftVert.z);
     vertices.push(rightVert.x, rightVert.y, rightVert.z);
 
-    const yOffset = 0.02; // slightly above asphalt to prevent Z-fighting
+    const yOffset = 0.02; // above asphalt, avoids Z-fighting
+    const laneEdge = halfWidth * 0.86;
+    const laneDiv = halfWidth * 0.42;
     centerLine.push(points[i].clone().setY(yOffset));
-    leftBound.push(points[i].clone().sub(right.clone().multiplyScalar(6.5 * miterScale)).setY(yOffset));
-    rightBound.push(points[i].clone().add(right.clone().multiplyScalar(6.5 * miterScale)).setY(yOffset));
-    leftLane.push(points[i].clone().sub(right.clone().multiplyScalar(3.5 * miterScale)).setY(yOffset));
-    rightLane.push(points[i].clone().add(right.clone().multiplyScalar(3.5 * miterScale)).setY(yOffset));
+    leftBound.push(points[i].clone().sub(right.clone().multiplyScalar(laneEdge * miterScale)).setY(yOffset));
+    rightBound.push(points[i].clone().add(right.clone().multiplyScalar(laneEdge * miterScale)).setY(yOffset));
+    leftLane.push(points[i].clone().sub(right.clone().multiplyScalar(laneDiv * miterScale)).setY(yOffset));
+    rightLane.push(points[i].clone().add(right.clone().multiplyScalar(laneDiv * miterScale)).setY(yOffset));
 
     if (i < points.length - 1) {
       const base = i * 2;
-      indices.push(base, base + 1, base + 2);
-      indices.push(base + 1, base + 3, base + 2);
+      // The road must face +Y; reversed winding culls its driving surface.
+      indices.push(base, base + 2, base + 1);
+      indices.push(base + 1, base + 2, base + 3);
     }
   }
 
@@ -170,14 +183,9 @@ export function buildRoadRibbon(geom: RouteGeometry, halfWidth = 7): RoadRibbon 
   return { roadGeometry, centerLine, leftBound, rightBound, leftLane, rightLane, halfWidth };
 }
 
-/** World position + heading (degrees, compass convention: 0=N, 90=E) for a
- * Frenet (s, d) pair -- s = station along the route, d = signed lateral
- * offset (positive = right of travel direction, matching traffic.py's
- * LANE_OFFSETS / planner.py's convention exactly). This is what turns the
- * backend's Frenet-space ego/NPC state into a real point on the actual
- * curved road, instead of rendering (d, -s) directly as if it were already
- * a world position (which is what made every route render as a straight
- * corridor regardless of the real road's turns). */
+/** World position + heading (degrees, compass: 0=N, 90=E) for a Frenet
+ * (s, d) pair -- s = station along the route, d = signed lateral offset
+ * (positive = right of travel, matching traffic.py's LANE_OFFSETS). */
 export function getWorldPosAtFrenet(
   geom: RouteGeometry,
   s: number,
@@ -185,29 +193,18 @@ export function getWorldPosAtFrenet(
 ): { pos: THREE.Vector3; headingDeg: number } {
   const { pos, dir } = getPathPosAtStation(geom, s);
   // Same "right" convention as app/services/frenet.py's frenet_to_local_xz
-  // (right_x, right_z = dz/seg_len, -dx/seg_len) and the old RoadMesh's
-  // miter offset (dir.z, -dir.x) -- all three must agree, or the ego,
-  // NPCs, and the road edges would each use a different idea of "which
-  // side is which".
+  // (right_x, right_z = dz/seg_len, -dx/seg_len).
   const right = new THREE.Vector3(dir.z, 0, -dir.x).normalize();
   const worldPos = pos.clone().add(right.multiplyScalar(d));
-  // Inverse of headingToForward(h) = (sin(h), -cos(h)): solve h from dir.
   const headingRad = Math.atan2(dir.x, -dir.z);
   const headingDeg = (headingRad * 180) / Math.PI;
   return { pos: worldPos, headingDeg };
 }
 
 /** Samples a short world-space path from (startS, startD) to (startS +
- * horizonM, endD), for rendering a planner candidate or an NPC's
- * projected path. The lateral interpolation uses smoothstep, not a
- * straight lerp -- a straight lerp from the current offset to a lane-
- * change target reads as an instant diagonal cut on screen; smoothstep
- * front-loads and back-loads the transition the way an actual quintic
- * lateral maneuver (app/services/planner.py's
- * quintic_lateral_maneuver_cost) is shaped: gentle at both ends, not
- * linear throughout. This is a visual approximation of that real cost
- * model, not a re-derivation of it -- the backend already decided the
- * candidate; this only has to look like a plausible path to it. */
+ * horizonM, endD) -- for a planner candidate or an NPC's projected path.
+ * Lateral interpolation is smoothstep (a real quintic lateral maneuver is
+ * gentle at both ends, not linear). */
 export function sampleFrenetCorridor(
   geom: RouteGeometry,
   startS: number,
@@ -226,4 +223,19 @@ export function sampleFrenetCorridor(
     points.push(pos.setY(0.15));
   }
   return points;
+}
+
+/** Roadside clearance uses the same mitered asphalt vertices as rendering.
+ * This is modeled display geometry, not surveyed sign placement. */
+export function roadsidePosition(geom: RouteGeometry, ribbon: RoadRibbon, station: number, clearance = 1.2) {
+  const s = Math.max(0, Math.min(station, geom.totalLength));
+  let i = 0;
+  while (i < geom.distances.length - 2 && geom.distances[i + 1] < s) i++;
+  const t = (s - geom.distances[i]) / Math.max(1e-9, geom.distances[i+1] - geom.distances[i]);
+  const positions = ribbon.roadGeometry.getAttribute('position');
+  // Vertex zero is the driver's right for the projection's compass convention.
+  const edge = new THREE.Vector3().fromBufferAttribute(positions, 2*i).lerp(new THREE.Vector3().fromBufferAttribute(positions, 2*(i+1)), t);
+  const center = geom.points[i].clone().lerp(geom.points[i+1], t);
+  const outward = edge.clone().sub(center).setY(0).normalize();
+  return { pos: edge.addScaledVector(outward, clearance), headingDeg: getWorldPosAtFrenet(geom, s, 0).headingDeg };
 }

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import {
   TelemetryStatePayload,
+  SceneControl,
   EgoState,
   EntityState,
   PerceptionObject,
@@ -14,9 +15,15 @@ import {
   ScenarioSummary,
   SurroundTrack,
   PredictionState,
+  CommandResult,
 } from '../types/protocol';
 
 interface SimulationStore {
+  simulationId: string | null;
+  epoch: number;
+  routeVersion: number;
+  commandResult: CommandResult | null;
+  setCommandResult: (result: CommandResult) => void;
   // Connection state
   isConnected: boolean;
   setConnected: (status: boolean) => void;
@@ -24,6 +31,7 @@ interface SimulationStore {
   // High-frequency telemetry
   ego: EgoState | null;
   traffic: EntityState[];
+  sceneControls: SceneControl[];
   perception: PerceptionObject[];
   planner: PlannerState | null;
   tick: number;
@@ -46,9 +54,10 @@ interface SimulationStore {
   // Route: sent once per destination (app/api/websockets.py's "route"
   // message), NOT part of the 10Hz "state" tick -- [lat, lng] pairs, a
   // different coordinate space from ego/traffic's local (x, z) frame.
+  roadContext: [number, number][];
   routeWaypoints: [number, number][];
   routeSteps: RouteStep[];
-  setRoute: (waypoints: [number, number][], steps: RouteStep[]) => void;
+  setRoute: (waypoints: [number, number][], steps: RouteStep[], roadContext?: [number, number][]) => void;
 
   // Scenario Engine state & controls (Phase 5)
   scenario: ScenarioState | null;
@@ -70,11 +79,27 @@ interface SimulationStore {
 }
 
 export const useSimulationStore = create<SimulationStore>((set, get) => ({
+  simulationId: null, epoch: -1, routeVersion: -1,
+  commandResult: null,
+  setCommandResult: (result) => set((state) =>
+    !state.commandResult || result.command_id === state.commandResult.command_id
+      ? {commandResult: result} : {}),
   isConnected: false,
-  setConnected: (status) => set({ isConnected: status }),
+  setConnected: (status) => set(status ? { isConnected: true } : {
+    isConnected: false, ego: null, safetyShield: null, prediction: null,
+    planner: null, perception: [], surroundPerception: [],
+    scenario: null, traffic: [],
+    roadContext: [],
+  routeWaypoints: [], routeSteps: [],
+    shap: null, anomaly: null, driverScore: null,
+    commandResult: ['sending', 'pending'].includes(get().commandResult?.status ?? '')
+      ? {...get().commandResult!, status: 'unknown', message: 'Connection lost before final acknowledgement'}
+      : get().commandResult,
+  }),
 
   ego: null,
   traffic: [],
+  sceneControls: [],
   perception: [],
   planner: null,
   tick: 0,
@@ -111,17 +136,21 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     get().sendCommand({ type: 'reset_simulation' });
   },
 
+  roadContext: [],
   routeWaypoints: [],
   routeSteps: [],
-  setRoute: (waypoints, steps) => set({ routeWaypoints: waypoints, routeSteps: steps }),
+  setRoute: (waypoints, steps, roadContext = []) => set({ routeWaypoints: waypoints, routeSteps: steps, roadContext }),
 
   sendCommand: () => console.warn('sendCommand called before useTelemetry mounted'),
   setSendCommand: (fn) => set({ sendCommand: fn }),
 
   applyDelta: (payload) => set((state) => {
+    if (state.simulationId === payload.simulation_id && (payload.epoch < state.epoch ||
+        (payload.epoch === state.epoch && payload.tick < state.tick))) return {};
     // Protocol v3 layered channels (ADR-001 item 7).
     const { pose, semantic, heavy } = payload.channels;
     return {
+      simulationId: payload.simulation_id, epoch: payload.epoch, routeVersion: payload.route_version,
       ego: pose.ego ?? state.ego,
       traffic: semantic.traffic ?? state.traffic,
       perception: semantic.perception ?? state.perception,
@@ -133,6 +162,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       scenario: semantic.scenario ?? state.scenario,
       surroundPerception: heavy.surround_perception ?? state.surroundPerception,
       prediction: heavy.prediction ?? state.prediction,
+      sceneControls: heavy.scene_controls ?? [],
       tick: payload.tick,
       simulationTime: payload.simulation_time_s,
     };

@@ -25,11 +25,11 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional
 
-from app.services.frenet import frenet_to_local_xz, latlng_to_local
+from app.services.frenet import frenet_to_local_xz, signed_curvature_at
 from app.services.planner import (
     LateralCandidate,
+    ff_stanley_steer,
     generate_candidates,
-    pure_pursuit_steering,
     select_best_candidate,
 )
 
@@ -68,11 +68,25 @@ def plan_lateral_offset(
     pp_lookahead_k: float,
     pp_lookahead_min_m: float,
     wheelbase_m: float,
+    lane_center_d_m: Optional[float] = None,
+    adjacent_lane_d_m: Optional[float] = None,
+    road_heading_deg: Optional[float] = None,
+    road_curvature_signed_1pm: Optional[float] = None,
 ) -> LateralPlan:
+    # After a completed lane change the "current lane" is the one the ego
+    # moved into -- the caller (physics_engine, via the Phase 8 state
+    # machine) passes it here so the decoupled planner keeps the car in
+    # that lane instead of pulling back to the module-default centre.
+    gc_kwargs = {}
+    if lane_center_d_m is not None:
+        gc_kwargs["lane_center_d"] = lane_center_d_m
+    if adjacent_lane_d_m is not None:
+        gc_kwargs["adjacent_lane_d"] = adjacent_lane_d_m
     candidates = generate_candidates(
         current_d=current_lateral_offset_m,
         lead_gap_m=lead_gap_m,
         adjacent_lane_clear=adjacent_lane_clear,
+        **gc_kwargs,
     )
     best = select_best_candidate(candidates)
     chosen_d_m = best.d_target
@@ -81,16 +95,23 @@ def plan_lateral_offset(
     d_error = chosen_d_m - lateral_target_d_m
     lateral_target_d_m = lateral_target_d_m + max(-max_d_step, min(max_d_step, d_error))
 
-    lookahead_m = pp_lookahead_k * v_mps + pp_lookahead_min_m
-    s_lookahead = current_station_m + lookahead_m
-    look_x, look_z, _, _ = frenet_to_local_xz(frenet_frame, s_lookahead, lateral_target_d_m)
-    ego_x, ego_z = latlng_to_local(
-        ego_lat, ego_lng, frenet_frame.origin_lat, frenet_frame.origin_lng,
+    # --- feed-forward + Stanley feedback path tracking (shared helper) ---
+    if road_curvature_signed_1pm is None:
+        road_curvature_signed_1pm = signed_curvature_at(frenet_frame, current_station_m)
+    if road_heading_deg is None:
+        _, _, _t_x, _t_z = frenet_to_local_xz(frenet_frame, current_station_m, 0.0)
+        road_heading_deg = math.degrees(math.atan2(_t_x, -_t_z))
+
+    desired_steer = ff_stanley_steer(
+        current_d_m=current_lateral_offset_m,
+        target_d_m=lateral_target_d_m,
+        ego_heading_deg=heading_deg,
+        road_heading_deg=road_heading_deg,
+        road_curvature_signed_1pm=road_curvature_signed_1pm,
+        v_mps=v_mps,
+        wheelbase_m=wheelbase_m,
+        steer_limit_rad=steer_limit_rad,
     )
-    dx, dz = look_x - ego_x, look_z - ego_z
-    lookahead_dist_m = math.hypot(dx, dz)
-    desired_steer = pure_pursuit_steering(heading_deg, dx, dz, lookahead_dist_m, wheelbase_m)
-    desired_steer = max(-steer_limit_rad, min(steer_limit_rad, desired_steer))
 
     return LateralPlan(
         candidates=candidates,

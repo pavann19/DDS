@@ -38,6 +38,8 @@ L_MAX = 6.0
 # operation instead of one np.linspace call per footprint. See update()'s
 # performance note.
 RAY_SAMPLE_STEPS = 80
+_RAY_FRACTIONS = np.linspace(0.0, 1.0, RAY_SAMPLE_STEPS, endpoint=False)
+_RAY_FRACTIONS.setflags(write=False)
 
 # Occupied-box sample templates are cached per (length_m, width_m) --
 # entities.py's ENTITY_DIMENSIONS_M has exactly 7 distinct box sizes, so
@@ -45,7 +47,7 @@ RAY_SAMPLE_STEPS = 80
 _FOOTPRINT_TEMPLATE_CACHE: dict = {}
 
 
-@dataclass
+@dataclass(slots=True)
 class OccupiedFootprint:
     x: float
     z: float
@@ -157,7 +159,7 @@ class OccupancyGrid:
         fp_z = np.array([fp.z for fp in footprints])
         target_cols = ((fp_x - self.ego_x) / CELL_SIZE_M) + GRID_CELLS // 2
         target_rows = ((fp_z - self.ego_z) / CELL_SIZE_M) + GRID_CELLS // 2
-        t = np.linspace(0.0, 1.0, RAY_SAMPLE_STEPS, endpoint=False)
+        t = _RAY_FRACTIONS
         ray_rows = np.round(ego_row + t[None, :] * (target_rows[:, None] - ego_row)).astype(np.intp).ravel()
         ray_cols = np.round(ego_col + t[None, :] * (target_cols[:, None] - ego_col)).astype(np.intp).ravel()
 
@@ -182,7 +184,12 @@ class OccupancyGrid:
         if valid_occ_rows.size > 0:
             np.add.at(self.log_odds, (valid_occ_rows, valid_occ_cols), L_OCCUPIED)
 
-        np.clip(self.log_odds, L_MIN, L_MAX, out=self.log_odds)
+        # Only these cells changed. Clip after both accumulations so shared
+        # cells retain exactly the same result as clipping the entire grid.
+        # Avoid scanning 160,000 unchanged cells on every perception tick.
+        for rows, cols in ((valid_ray_rows, valid_ray_cols),
+                           (valid_occ_rows, valid_occ_cols)):
+            self.log_odds[rows, cols] = np.clip(self.log_odds[rows, cols], L_MIN, L_MAX)
 
     def _scatter_add(self, rows: np.ndarray, cols: np.ndarray, delta: float) -> None:
         if rows.size == 0:

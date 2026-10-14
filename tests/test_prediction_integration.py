@@ -119,3 +119,77 @@ def test_prediction_state_is_exposed():
         a = state["agents"][0]
         assert "trail" in a and "intent" in a
         assert len(a["trail"]) == 30  # 3.0 s / 0.1 s
+
+
+# ---------------------------------------------------------------------------
+# Training-observation boundary: the curved-road phantom cut-in must be
+# QUANTITATIVELY BOUNDED. With only same-direction, lane-keeping ambient
+# traffic on a curve, the proactive cut-in response must fire on a small
+# fraction of ticks and cost almost no speed. The cut-in signal is now the
+# agent's position-differenced lane-relative lateral RATE with the
+# Frenet-frame geometry term (v_s * kappa * d) subtracted; oncoming traffic
+# is excluded from the gate.
+# ---------------------------------------------------------------------------
+import math as _m
+from app.services.physics_engine import PhysicsEngine as _PE, EGO_LANE_OFFSET_M as _ELO
+
+
+def _phantom_arc(R, lead=40, step=3.0):
+    lat0, lng0 = 37.7749, -122.4194
+    ML, MG = 111_320.0, 111_320.0 * _m.cos(_m.radians(lat0))
+    pts = [(lat0, lng0 + (i * step) / MG) for i in range(lead)]
+    x0 = (lead - 1) * step
+    ang = 0.0
+    while ang < _m.pi / 2:
+        ang += step / R
+        pts.append((lat0 + R * (1 - _m.cos(ang)) / ML, lng0 + (x0 + R * _m.sin(ang)) / MG))
+    ln, lg = pts[-1]
+    for i in range(1, 60):
+        pts.append((ln + (i * step) / ML, lg))
+    return pts
+
+
+def test_curved_road_phantom_cut_in_is_quantitatively_bounded():
+    for R in (80.0, 120.0, 200.0, 300.0):
+        for seed in (1, 2, 3):
+            eng = _PE(seed=seed)
+            route = _phantom_arc(R)
+            eng.set_destination(*route[-1])
+            eng.set_route(route)
+            eng.reset_state(station_m=0.0, speed_kmh=45.0, lateral_offset_m=_ELO)
+            total = eng.station_distances[-1]
+
+            # same route, no traffic -> the pure curve-cap speed floor
+            ref = _PE(seed=seed)
+            ref.set_destination(*route[-1])
+            ref.set_route(route)
+            ref.reset_state(station_m=0.0, speed_kmh=45.0, lateral_offset_m=_ELO)
+            ref.traffic = None
+
+            n = 0
+            cutin_ticks = 0
+            min_traffic = 1e9
+            min_ref = 1e9
+            for _ in range(1200):
+                eng.update("Maintain Speed", dt=0.1)
+                ref.update("Maintain Speed", dt=0.1)
+                st = eng.current_station_m
+                if 15.0 < st < total - 70.0:
+                    n += 1
+                    pr = eng.prediction_result
+                    if pr is not None and pr.proactive_decel_mps2 > 0.0:
+                        cutin_ticks += 1
+                    min_traffic = min(min_traffic, eng.speed_kmh)
+                    min_ref = min(min_ref, ref.speed_kmh)
+
+            assert n > 100
+            frac = cutin_ticks / n
+            phantom_speed_loss = min_ref - min_traffic  # traffic-only speed cost
+            # BOUND: <= 15% of mid-curve ticks, <= 2 km/h of speed beyond the
+            # legitimate curve cap. Realistic radii (R >= 120) should be ~0.
+            assert frac <= 0.15, f"R={R} seed={seed}: phantom cut-in on {100*frac:.0f}% of ticks"
+            assert phantom_speed_loss <= 2.0, (
+                f"R={R} seed={seed}: phantom cut-in cost {phantom_speed_loss:.1f} km/h of speed"
+            )
+            if R >= 120.0:
+                assert frac <= 0.05, f"R={R} seed={seed}: {100*frac:.0f}% on a realistic curve"

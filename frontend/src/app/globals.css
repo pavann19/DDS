@@ -1,71 +1,1573 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 :root {
-  /* DDS 2.0 Color Palette */
-  --bg-app: #0A0D12;
-  --bg-panel: #12161E;
-  --bg-surface: #1A1F2B;
-  
-  --border-subtle: #1A1F2B;
-  --border-default: #2A303C;
-  --border-focus: #3A4250;
-  
-  --text-muted: #94a3b8;
-  --text-primary: #CBD5E1;
-  --text-bright: #F8FAFC;
-  
-  /* Semantic Tokens */
-  --brand: #00E5FF;
-  --brand-muted: rgba(0, 229, 255, 0.2);
-  
-  --success: #00FF88;
-  --success-muted: rgba(0, 255, 136, 0.2);
-  
-  --warning: #FFAB00;
-  --warning-muted: rgba(255, 171, 0, 0.2);
-  
-  --critical: #FF3D00;
-  --critical-muted: rgba(255, 61, 0, 0.2);
+  /* Shared cockpit tokens: warm light surfaces, quiet green accents,
+     legible type and consistent spacing. */
+
+  /* --- surfaces --- */
+  --bg-app: #f5f5f2;
+  --bg-panel: #ffffff;
+  --bg-surface: #f6f7f5;
+  --bg-card: #ffffff;
+  --bg-frost: rgba(255, 255, 255, 0.96);
+  --bg-inset: #f0f2ef;
+
+  --border-subtle: #e8ebe5;
+  --border-default: #dce1da;
+  --border-strong: #c9d1c7;
+  --border-focus: #397669;
+
+  /* --- ink --- */
+  --text-faint: #788078;
+  --text-muted: #656e66;
+  --text-primary: #28352d;
+  --text-bright: #18261d;
+
+  /* --- accent (one) --- */
+  --brand: #356f60;
+  --brand-muted: #e7efea;
+  --brand-dim: #b8cfc3;
+  --brand-ink: #ffffff;
+
+  /* --- semantic state (separate from the accent) --- */
+  --success: #34765b;
+  --success-muted: rgba(16, 185, 129, 0.15);
+  --warning: #a96b16;
+  --warning-muted: rgba(245, 158, 11, 0.16);
+  --critical: #c04436;
+  --critical-muted: rgba(239, 68, 68, 0.18);
+
+  /* --- spacing scale (4px base) --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+
+  /* --- radius --- */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* --- glass + elevation --- */
+  --glass-blur: blur(20px) saturate(180%);
+  --glass-blur-sm: blur(12px) saturate(160%);
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --elev-2: 0 8px 24px -8px rgba(0, 0, 0, 0.55);
+  --elev-frost:
+    0 10px 30px -5px rgba(0, 0, 0, 0.6), 0 0 20px rgba(0, 242, 254, 0.05);
+  --elev-card: 0 20px 40px -10px rgba(0, 0, 0, 0.7);
+  --glow-brand: 0 0 24px rgba(0, 242, 254, 0.22);
+  --glow-warning: 0 0 24px rgba(245, 158, 11, 0.25);
+  --glow-critical: 0 0 24px rgba(239, 68, 68, 0.32);
+
+  /* --- motion (things ease, they don't snap) --- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 140ms;
+  --dur: 240ms;
+  --dur-slow: 420ms;
+  --spring: 520ms cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* --- type (faces loaded via next/font in layout.tsx) --- */
+  --font-display: var(--font-inter), "Segoe UI", system-ui, sans-serif;
+  --font-sans:
+    var(--font-inter), "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
+    sans-serif;
+  --font-mono:
+    var(--font-jetbrains), "IBM Plex Mono", ui-monospace, "SFMono-Regular",
+    Consolas, monospace;
 }
 
 @theme inline {
   --color-background: var(--bg-app);
   --color-foreground: var(--text-primary);
-  
   --color-brand: var(--brand);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-critical: var(--critical);
-  
-  --font-sans: "Segoe UI", Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #1a1a2e transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg-app);
+  color: var(--text-primary);
   font-family: var(--font-sans);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Smooth scrollbar for webkit browsers */
 ::-webkit-scrollbar {
-  width: 4px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1a1a2e;
-  border-radius: 4px;
+  background: var(--border-strong);
+  border-radius: var(--radius-xs);
 }
 
-/* Canvas rendering hint */
 canvas {
   touch-action: none;
+}
+
+/* Driving cockpit: calm surfaces, clear hierarchy, controls off the road. */
+.drive-app {
+  position: relative;
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 74px;
+  height: 100dvh;
+  min-height: 480px;
+  overflow: hidden;
+  background: #f5f5f2;
+}
+.drive-app button,
+.drive-drawer button,
+.drive-drawer select {
+  font: inherit;
+}
+.drive-app button,
+.drive-drawer button {
+  cursor: pointer;
+}
+.drive-app button:disabled,
+.drive-drawer button:disabled,
+.drive-drawer select:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.drive-sidebar {
+  position: relative;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 28px 8px;
+  background: #fdfdfb;
+  border-right: 1px solid #e0e4dd;
+  overflow: auto;
+}
+.drive-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.5px;
+}
+.brand-symbol {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  background: #e8efe8;
+  color: #356f60;
+  border-radius: 11px;
+}
+.drive-brand > span:nth-child(2) {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.brand-divider {
+  width: 1px;
+  height: 16px;
+  background: #d9dfd6;
+}
+.connection-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #b2b8ae;
+  margin-left: auto;
+}
+.connection-dot.online {
+  background: #568c68;
+  box-shadow: 0 0 0 4px #edf3eb;
+}
+.drive-speed {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 32px 0 26px;
+}
+.drive-cruise { display:grid; gap:4px; min-width:142px; margin-left:10px; padding:8px 10px 6px; border:1px solid #ffffffb3; border-radius:12px; background:#ffffffe8; backdrop-filter:blur(12px); }
+.drive-cruise label { color:#667168; font-size:9px; font-weight:650; }
+.drive-cruise > div { display:flex; align-items:baseline; gap:5px; }
+.drive-cruise input[type="number"] { width:62px; border:0; outline:0; background:transparent; color:#202923; font-size:20px; font-variant-numeric:tabular-nums; }
+.drive-cruise > div span { color:#788078; font-size:10px; }
+.drive-cruise input[type="range"] { width:100%; height:14px; margin:0; accent-color:#397669; cursor:ew-resize; }
+.drive-speed > span:first-child {
+  font-size: 92px;
+  line-height: 1;
+  font-weight: 400;
+  letter-spacing: -7px;
+  min-width: 110px;
+}
+.speed-unit {
+  font-size: 15px;
+  color: #788078;
+}
+.drive-target {
+  margin: 0 0 24px;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #edf2eb;
+}
+.drive-target span {
+  color: #7d8579;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.drive-target strong {
+  font-size: 24px;
+  font-weight: 550;
+  line-height: 1;
+}
+.drive-target small {
+  color: #788078;
+  font-size: 11px;
+}
+.stage-route {
+  position: absolute;
+  z-index: 6;
+  top: 24px;
+  right: 26px;
+  width: clamp(210px, 23vw, 310px);
+  pointer-events: none;
+}
+.drive-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 55px;
+}
+.state-orbit {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #397669;
+  background: #e9f0e7;
+}
+.drive-state h1 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 550;
+  letter-spacing: -0.6px;
+}
+.drive-state p {
+  margin: 5px 0 0;
+  color: #7b8178;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.drive-reading-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px;
+  padding: 25px 0 20px;
+}
+.drive-reading-row div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.drive-reading-row span {
+  color: #7b8178;
+  font-size: 10px;
+}
+.drive-reading-row strong {
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.3px;
+}
+.drive-reading-row small {
+  font-size: 10px;
+  font-weight: 400;
+  color: #7b8178;
+}
+.drive-safety {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #59765e;
+  font-size: 10px;
+  padding: 13px 0 23px;
+  border-bottom: 1px solid #e8ebe3;
+}
+.journey-planner { position:fixed; inset:3vh 4vw; z-index:1000; display:flex; flex-direction:column; gap:12px; max-width:1120px; max-height:94vh; margin:auto; padding:18px; overflow:auto; border:1px solid #ffffffb8; border-radius:20px; background:#f8faf7; color:#25322b; box-shadow:0 24px 90px #101c1680; }
+.journey-planner > header,.journey-planner > footer { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.journey-planner > header,.journey-planner > footer { position:sticky; z-index:2; flex-shrink:0; padding-block:4px; background:#f8faf7; }
+.journey-planner > header { top:0; }
+.journey-planner > footer { bottom:0; }
+.journey-planner > header h2 { margin:0; font-size:20px; font-weight:600; }
+.journey-planner button { min-height:34px; padding:7px 11px; border:1px solid #dce3dc; border-radius:9px; background:#fff; color:#26352d; cursor:pointer; }
+.journey-planner button:disabled { opacity:.45; cursor:not-allowed; }
+.journey-planner-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.journey-planner-fields form label { display:block; margin-bottom:5px; color:#667168; font-size:11px; font-weight:600; }
+.journey-planner-fields form > div { display:flex; gap:6px; }
+.journey-planner-fields input { flex:1; min-width:0; padding:9px 10px; border:1px solid #dce3dc; border-radius:9px; background:#fff; color:#202923; }
+.journey-map-picking,.journey-search-results { display:flex; flex-wrap:wrap; gap:7px; }
+.journey-planner-map { flex:1 1 300px; width:100%; min-height:260px; border:1px solid #d8dfd8; border-radius:13px; overflow:hidden; background:#e7ece7; }
+.journey-planner > footer { color:#667168; font-size:11px; }
+.journey-planner > footer button:last-child { border-color:#245a46; background:#245a46; color:white; }
+.journey-planner [role="status"] { margin:0; color:#9f453d; font-size:12px; }
+.camera-rig-note { margin:0 0 10px; color:#778178; font-size:10px; line-height:1.45; }
+.camera-rig-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.camera-rig-grid figure { min-width:0; margin:0; overflow:hidden; border:1px solid #e1e7e0; border-radius:9px; background:#f2f5f1; }
+.camera-rig-grid img,.camera-rig-empty { display:block; width:100%; aspect-ratio:16/9; object-fit:cover; background:#e7ece7; }
+.camera-rig-empty { display:grid; place-items:center; color:#778178; font-size:10px; }
+.camera-rig-grid figcaption { display:flex; justify-content:space-between; gap:5px; padding:5px 7px; color:#364239; font-size:9px; text-transform:capitalize; }
+.camera-rig-grid figcaption small { color:#818981; font-size:8px; white-space:nowrap; }
+.is-critical {
+  color: #bf4335;
+}
+.is-critical .state-orbit {
+  background: #fcece7;
+  color: #bf4335;
+}
+.drive-route {
+  padding-top: 23px;
+}
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 550;
+  margin-bottom: 13px;
+}
+.section-heading svg {
+  color: #8c9487;
+}
+.drive-map {
+  position: relative;
+  overflow: hidden;
+  border-radius: 20px;
+  border: 1px solid #ffffff66;
+  height: auto;
+  aspect-ratio: 300 / 180;
+  background: #edf1ed80;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 32px #34483714;
+}
+.drive-map > svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  opacity: .86;
+}
+.stage-route { pointer-events: auto; }
+.geographic-map-canvas { width: 100%; height: 100%; }
+.geographic-map { z-index: 0; aspect-ratio: 300 / 210; }
+.geographic-map .leaflet-container { background: #e9ede8; font-family: inherit; }
+.geographic-map .leaflet-control-attribution { font-size: 9px; }
+.geographic-map-caption {
+  position: absolute;
+  z-index: 500;
+  top: 10px;
+  left: 10px;
+  max-width: calc(100% - 58px);
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: #fffffff0;
+  color: #43574a;
+  font-size: 9px;
+  pointer-events: none;
+}
+.geographic-map-error {
+  position: absolute;
+  z-index: 500;
+  left: 10px;
+  right: 10px;
+  bottom: 32px;
+  padding: 8px;
+  border-radius: 7px;
+  color: #9a4931;
+  background: #fff5edf2;
+  font-size: 10px;
+}
+.map-caption {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  position: absolute;
+  bottom: 9px;
+  left: 10px;
+  padding: 5px 8px;
+  font-size: 9px;
+  color: #5e6f5d;
+  background: #fffffff0;
+  border-radius: 6px;
+}
+.destination-button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 14px 0;
+  background: none;
+  border: none;
+  color: #344837;
+  text-align: left;
+  font-size: 12px !important;
+}
+.destination-button svg:last-child {
+  margin-left: auto;
+  color: #8a9586;
+}
+.route-instruction {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 0 18px;
+  border-top: 1px solid #e8ebe3;
+}
+.instruction-arrow {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 39px;
+  height: 43px;
+  background: #eff2eb;
+  border-radius: 11px;
+}
+.route-instruction div {
+  min-width: 0;
+}
+.route-instruction strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.route-instruction div > span {
+  display: block;
+  color: #858c80;
+  font-size: 10px;
+  margin-top: 5px;
+}
+.sidebar-bottom {
+  margin-top: auto;
+  padding-top: 16px;
+}
+.drive-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background: #2e4b3d;
+  color: white;
+  border: none;
+  border-radius: 12px;
+  padding: 14px 18px;
+  width: 100%;
+  font-size: 12px !important;
+  font-weight: 550 !important;
+  transition:
+    background 160ms,
+    transform 160ms;
+}
+.drive-primary:hover {
+  background: #39614e;
+}
+.drive-primary:active {
+  transform: scale(0.98);
+}
+.command-status {
+  color: #8a9085;
+  text-align: center;
+  font-size: 9px;
+  line-height: 1.5;
+  min-height: 27px;
+  margin: 11px 0 0;
+  overflow-wrap: anywhere;
+}
+.command-status.is-error {
+  color: #b55142;
+}
+.drive-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #e9ede8;
+}
+.stage-top {
+  position: absolute;
+  z-index: 5;
+  top: 27px;
+  left: 30px;
+  right: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.stage-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: #5b6c5c;
+  background: #ffffffe0;
+  padding: 9px 12px;
+  border: 1px solid #fff9;
+  border-radius: 30px;
+}
+.stage-location {
+  font-size: 10px;
+  color: #858d81;
+  letter-spacing: 0.2px;
+}
+.stage-bottom {
+  position: absolute;
+  z-index: 5;
+  bottom: 23px;
+  left: 26px;
+  right: 26px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.stage-bottom button,
+.stage-bottom nav {
+  pointer-events: auto;
+}
+.view-switcher {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fffffff0;
+  border: 1px solid #ffffff;
+  border-radius: 13px;
+  padding: 7px 10px 7px 14px;
+  box-shadow: 0 4px 16px #5265470a;
+}
+.view-switcher > span {
+  font-size: 10px;
+  color: #7c8776;
+}
+.view-switcher nav {
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  gap: 5px !important;
+}
+.view-switcher nav button {
+  box-shadow: none !important;
+  width: 32px !important;
+  height: 32px !important;
+}
+.drive-icon-button {
+  display: grid;
+  place-items: center;
+  width: 37px;
+  height: 37px;
+  border-radius: 11px;
+  border: 1px solid #e3e8de;
+  background: #fff;
+  color: #60735b;
+  transition: background 160ms;
+}
+.drive-icon-button:hover {
+  background: #edf2e8;
+}
+.recenter-button {
+  position: absolute;
+  right: 0;
+  bottom: 3px;
+}
+.drive-alert {
+  position: absolute;
+  z-index: 8;
+  top: 85px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 20px;
+  border-radius: 14px;
+  background: #fff7f4;
+  border: 1px solid #e9bfb3;
+  color: #b04432;
+  max-width: calc(100% - 40px);
+  width: max-content;
+  box-shadow: 0 8px 28px #77433512;
+}
+.drive-alert div {
+  min-width: 0;
+}
+.drive-alert strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+.drive-alert span {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+}
+.drive-alert.drive-alert-critical { position:fixed; z-index:1100; top:12px; bottom:auto; max-width:min(720px,calc(100vw - 24px)); }
+.drive-alert-critical ~ .journey-planner { top:132px; max-height:calc(100vh - 150px); }
+.drive-bottom-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  padding: 0 29px;
+  gap: 24px;
+  background: #fdfdfb;
+  border-top: 1px solid #e3e7de;
+  z-index: 15;
+}
+.bottom-brand {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 277px;
+}
+.bottom-brand > span {
+  font-weight: 400;
+  font-size: 10px;
+  color: #949b8e;
+}
+.drive-bottom-bar nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 auto;
+}
+.drive-bottom-bar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: #858e7f;
+  border: none;
+  background: transparent;
+  padding: 11px 20px;
+  border-radius: 11px;
+  font-size: 11px !important;
+  transition:
+    color 160ms,
+    background 160ms;
+}
+.drive-bottom-bar button:hover {
+  background: #eff3ea;
+  color: #355d45;
+}
+.drive-bottom-bar button.active {
+  background: #e9efe3;
+  color: #3b6649;
+}
+.settings-button {
+  margin-left: auto;
+}
+.drive-drawer {
+  position: fixed;
+  inset: 18px 18px 18px auto;
+  margin: 0;
+  width: min(425px, calc(100vw - 32px));
+  height: calc(100dvh - 36px);
+  max-height: none;
+  max-width: none;
+  padding: 27px;
+  border: 1px solid #e4e9de;
+  border-radius: 22px;
+  background: #fdfdfb;
+  color: #28352d;
+  box-shadow: 0 16px 70px #2633221a;
+  overflow-y: auto;
+  animation: drawer-enter 220ms ease-out;
+}
+.drive-drawer::backdrop {
+  background: #26322233;
+}
+.drawer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 30px;
+}
+.drive-eyebrow {
+  display: block;
+  color: #8c9786;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  font-weight: 550;
+}
+.drawer-heading h2 {
+  font-size: 25px;
+  font-weight: 500;
+  letter-spacing: -0.8px;
+  margin: 8px 0 0;
+}
+.drawer-note {
+  font-size: 11px;
+  line-height: 1.8;
+  color: #8a9382;
+  margin: 14px 0;
+}
+.destination-list button {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid #e6ebdf;
+  padding: 20px 0;
+  background: none;
+  color: #354832;
+  text-align: left;
+}
+.destination-list button > svg:last-child {
+  margin-left: auto;
+}
+.destination-icon {
+  display: grid;
+  place-items: center;
+  background: #edf2e7;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+}
+.destination-list strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 500;
+}
+.destination-list small {
+  display: block;
+  color: #919b86;
+  font-size: 11px;
+  margin-top: 5px;
+}
+.setting-label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 12px;
+  font-weight: 550;
+}
+.drive-settings select {
+  width: 100%;
+  background: #f1f4ec;
+  border: 1px solid #dce5d3;
+  border-radius: 11px;
+  padding: 13px 10px;
+  color: #354832;
+  font-size: 12px;
+}
+.setting-divider {
+  height: 1px;
+  background: #e5eade;
+  margin: 25px 0;
+}
+.environment-card { padding: 18px; background: #f1f4ee; border: 1px solid #e0e6dc; border-radius: 16px; }
+.environment-card h3 { font-size: 17px; font-weight: 550; margin: 0 0 8px; }
+.environment-card > p { color: #798477; font-size: 12px; line-height: 1.6; }
+.environment-status { display: inline-block; font-size: 10px; color: #496552; margin: 10px 0 4px; }
+.environment-card .setting-label, .advanced-driving .setting-label { margin: 20px 0 8px; }
+.advanced-driving { border-top: 1px solid #e5eade; margin-top: 25px; padding-top: 20px; }
+.advanced-driving summary { color: #61705e; font-size: 12px; cursor: pointer; }
+.setting-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+.setting-toggle strong {
+  font-size: 13px;
+  font-weight: 500;
+  display: block;
+}
+.setting-toggle small {
+  font-size: 10px;
+  color: #8b957f;
+  display: block;
+  margin-top: 5px;
+}
+.setting-toggle input {
+  width: 20px;
+  height: 20px;
+  accent-color: #356f60;
+}
+.drive-secondary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #dde5d4;
+  border-radius: 11px;
+  padding: 13px;
+  background: #f4f6ef;
+  color: #607251;
+  width: 100%;
+  margin-top: 12px;
+  font-size: 12px !important;
+}
+.vehicle-detail-body {
+  font-size: 12px;
+}
+.vehicle-detail-body > div {
+  box-shadow: none !important;
+}
+.vehicle-detail-body header {
+  background: transparent !important;
+}
+@keyframes drawer-enter {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.vehicle-sections {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid #e5eadd;
+  border-radius: 13px;
+  background: #f1f4ec;
+}
+.vehicle-sections button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  padding: 11px 2px;
+  background: transparent;
+  border-radius: 9px;
+  color: #839176;
+  font-size: 9px;
+  transition:
+    background 160ms,
+    color 160ms;
+}
+.vehicle-sections button[aria-pressed="true"] {
+  background: #fff;
+  color: #39634b;
+  box-shadow: 0 1px 4px #38512c09;
+}
+.vehicle-section-content {
+  margin-top: 28px;
+}
+.vehicle-section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 15px;
+}
+.vehicle-section-title h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.3px;
+}
+.vehicle-live {
+  color: #6e8e5d;
+  background: #edf3e5;
+  padding: 5px 7px;
+  border-radius: 6px;
+  font-size: 9px;
+}
+.vehicle-reading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid #e8ecdf;
+}
+.vehicle-reading dt {
+  color: #89937f;
+  font-size: 11px;
+}
+.vehicle-reading dd {
+  color: #35482d;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: right;
+  margin: 0;
+}
+.vehicle-subtitle {
+  font-size: 11px;
+  color: #738664;
+  font-weight: 500;
+  margin: 28px 0 6px;
+}
+.vehicle-reading-note {
+  font-size: 11px;
+  line-height: 1.8;
+  color: #8b957f;
+  margin: 0 0 13px;
+}
+.vehicle-empty {
+  padding: 60px 15px;
+  text-align: center;
+  color: #819273;
+}
+.vehicle-empty > svg {
+  margin: 0 auto 20px;
+}
+.vehicle-empty h3 {
+  font-size: 17px;
+  font-weight: 500;
+  color: #4e6740;
+}
+.vehicle-empty p {
+  font-size: 11px;
+  line-height: 1.7;
+  margin-top: 9px;
+}
+.vehicle-safety-card {
+  background: #eef4e8;
+  border: 1px solid #e2ebd8;
+  border-radius: 15px;
+  padding: 24px;
+  color: #557348;
+  margin: 20px 0;
+}
+.vehicle-safety-card h4 {
+  font-size: 17px;
+  font-weight: 500;
+  margin: 14px 0 7px;
+}
+.vehicle-safety-card p {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #809172;
+}
+.vehicle-safety-card.intervention {
+  background: #fff2ec;
+  border-color: #f1d5c7;
+  color: #a9573c;
+}
+.vehicle-safety-card.intervention p {
+  color: #b8816b;
+}
+.vehicle-reasons {
+  color: #ad715a;
+  font-size: 11px;
+  line-height: 1.8;
+  padding-left: 18px;
+  margin-top: 20px;
+}
+@media (max-height: 790px) and (min-width: 761px) {
+  .drive-sidebar {
+    padding-top: 20px;
+  }
+  .drive-speed {
+    padding: 24px 0 18px;
+  }
+  .drive-speed > span:first-child {
+    font-size: 76px;
+  }
+  .drive-reading-row {
+    padding: 17px 0 9px;
+  }
+  .drive-safety {
+    padding-bottom: 16px;
+  }
+  .drive-route {
+    padding-top: 16px;
+  }
+  .drive-map {
+    height: auto;
+  }
+  .route-instruction {
+    padding: 12px 0;
+  }
+  .sidebar-bottom {
+    padding-top: 10px;
+  }
+}
+@media (max-width: 1000px) {
+  .drive-app {
+    grid-template-columns: 290px minmax(0, 1fr);
+  }
+  .drive-sidebar {
+    padding-left: 22px;
+    padding-right: 22px;
+  }
+  .bottom-brand {
+    width: 237px;
+  }
+  .bottom-brand span {
+    display: none;
+  }
+  .drive-bottom-bar nav {
+    gap: 0;
+  }
+  .drive-bottom-bar button {
+    padding: 11px 14px;
+  }
+  .stage-location {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .drive-speed { align-items:flex-start; }
+  .drive-cruise { min-width:130px; margin-left:0; }
+  .journey-planner { inset:1vh 2vw; max-height:98vh; padding:12px; border-radius:14px; }
+  .journey-planner-fields { grid-template-columns:1fr; }
+  .journey-planner > footer { flex-wrap:wrap; }
+  .drive-app {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(230px, 1fr) auto 64px;
+    min-height: 600px;
+  }
+  .drive-stage {
+    grid-row: 1;
+  }
+  .drive-sidebar {
+    grid-row: 2;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 18px;
+    padding: 16px 20px 12px;
+    border-right: none;
+    border-top: 1px solid #e0e4dd;
+    overflow: visible;
+  }
+  .drive-brand {
+    display: none;
+  }
+  .drive-speed {
+    grid-column: 1;
+    grid-row: 1;
+    padding: 0;
+    gap: 6px;
+  }
+  .drive-speed > span:first-child {
+    font-size: 65px;
+    min-width: 72px;
+    letter-spacing: -4px;
+  }
+  .speed-unit {
+    font-size: 11px;
+  }
+  .drive-target {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+    margin: 12px 0 0;
+    padding: 7px 10px;
+    gap: 7px;
+  }
+  .drive-target strong {
+    font-size: 20px;
+  }
+  .drive-state {
+    grid-column: 2;
+    grid-row: 1;
+    min-height: 36px;
+    gap: 7px;
+  }
+  .state-orbit {
+    width: 30px;
+    height: 30px;
+  }
+  .drive-state h1 {
+    font-size: 14px;
+  }
+  .drive-state p {
+    font-size: 9px;
+    margin-top: 3px;
+  }
+  .drive-reading-row {
+    display: none;
+  }
+  .drive-safety {
+    grid-column: 2;
+    grid-row: 2;
+    padding: 6px 0 0;
+    font-size: 9px;
+    border: none;
+  }
+  .drive-safety svg {
+    width: 13px;
+  }
+  .drive-route {
+    display: none;
+  }
+  .sidebar-bottom {
+    grid-column: 1 / -1;
+    padding-top: 14px;
+    margin: 0;
+  }
+  .drive-primary {
+    padding: 10px;
+  }
+  .command-status {
+    font-size: 9px;
+    min-height: 14px;
+    margin-top: 7px;
+  }
+  .drive-bottom-bar {
+    grid-row: 3;
+    padding: 0 12px;
+    gap: 0;
+  }
+  .bottom-brand {
+    display: none;
+  }
+  .drive-bottom-bar nav {
+    margin: 0 auto 0 0;
+  }
+  .drive-bottom-bar button {
+    padding: 10px 13px;
+    gap: 6px;
+  }
+  .stage-top {
+    top: 15px;
+    left: 16px;
+    right: 16px;
+  }
+  .stage-bottom {
+    bottom: 14px;
+    left: 16px;
+    right: 16px;
+  }
+  .stage-label {
+    font-size: 10px;
+  }
+  .stage-route {
+    top: 15px;
+    right: 16px;
+    width: 145px;
+  }
+  .drive-map {
+    border-radius: 14px;
+  }
+  .stage-label {
+    max-width: calc(100% - 155px);
+    font-size: 9px;
+    padding: 8px;
+  }
+  .drive-drawer {
+    padding: 22px;
+  }
+  .drive-alert {
+    top: 63px;
+    padding: 11px 14px;
+  }
+  .drive-alert span {
+    font-size: 10px;
+  }
+}
+
+/* Reference-inspired desktop layout: the road owns the screen, with readings
+   and controls layered around its edges. Mobile keeps the compact lower panel. */
+@media (min-width: 761px) {
+  .drive-app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 64px;
+  }
+  .drive-sidebar {
+    display: contents;
+  }
+  .drive-brand {
+    display: none;
+  }
+  .drive-stage {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .drive-speed,
+  .drive-target,
+  .drive-state,
+  .drive-reading-row,
+  .drive-safety,
+  .drive-route,
+  .sidebar-bottom {
+    position: absolute;
+    z-index: 12;
+  }
+  .drive-speed {
+    top: 26px;
+    left: 32px;
+    padding: 0;
+    gap: 12px;
+  }
+  .drive-speed > span:first-child {
+    font-size: 86px;
+    min-width: 100px;
+  }
+  .drive-target {
+    top: 142px;
+    left: 34px;
+    margin: 0;
+    background: #ffffffa6;
+    border: 1px solid #ffffff66;
+  }
+  .drive-state {
+    top: 150px;
+    left: 32px;
+    width: 260px;
+  }
+  .drive-reading-row {
+    top: 230px;
+    left: 34px;
+    width: 235px;
+    padding: 0;
+  }
+  .drive-safety {
+    top: 292px;
+    left: 34px;
+    padding: 0;
+    border: none;
+  }
+  .drive-route,
+  .sidebar-bottom {
+    bottom: 150px;
+    padding: 16px 18px;
+    border: 1px solid #ffffff99;
+    border-radius: 18px;
+    background: #ffffffe0;
+    backdrop-filter: blur(16px);
+    box-shadow: 0 6px 24px #3448370a;
+  }
+  .drive-route {
+    left: 32px;
+    width: 260px;
+  }
+  .drive-route .section-heading {
+    display: none;
+  }
+  .destination-button {
+    padding: 2px 0 14px;
+  }
+  .route-instruction {
+    padding: 12px 0 0;
+  }
+  .sidebar-bottom {
+    right: 26px;
+    width: 260px;
+    margin: 0;
+  }
+  .command-status {
+    margin-top: 9px;
+    min-height: 14px;
+  }
+  .stage-top {
+    justify-content: center;
+    left: 300px;
+    right: 340px;
+  }
+  .bottom-brand {
+    width: auto;
+  }
+  .drive-bottom-bar nav {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  .drive-alert {
+    top: 80px;
+    max-width: calc(100% - 650px);
+  }
+}
+@media (min-width: 761px) and (max-height: 690px) {
+  .drive-speed > span:first-child { font-size: 68px; }
+  .drive-target { top: 114px; }
+  .drive-state { top: 130px; }
+  .drive-reading-row { top: 205px; }
+  .drive-safety { top: 258px; }
+  .drive-route, .sidebar-bottom { bottom: 135px; }
+}
+@media (min-width: 761px) and (max-width: 1000px) {
+  .stage-top { display: none; }
+  .drive-alert {
+    top: auto;
+    bottom: 90px;
+    max-width: calc(100% - 64px);
+  }
+}
+
+/* The one glass surface — every floating console panel uses it. */
+.dds-glass {
+  background: var(--bg-frost);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--elev-frost);
+}
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  .dds-glass {
+    background: #0b0f16;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* One-shot accent pulse a panel plays when its subsystem changes state
+   (shield override, cut-in engaged). */
+@keyframes dds-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--pulse-color, var(--brand-muted));
+  }
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+/* HUD chips grow in rather than pop. */
+@keyframes dds-grow {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Rail panels slide + fade in on mount (staggered by --i). */
+@keyframes dds-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Live status beacon — a soft breathing pulse (system is active). */
+@keyframes dds-beacon {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.35;
+  }
+}
+
+/* Hazard badge flash. */
+@keyframes dds-hazard {
+  from {
+    opacity: 0.82;
+  }
+  to {
+    opacity: 1;
+    box-shadow: var(--glow-critical);
+  }
+}
+
+/* Reduced-motion is a real path: every transition/animation collapses. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Navigation endpoints remain legible over light and dark map tiles. */
+.route-map-pin span { display:block; padding:6px 8px; border:2px solid white; border-radius:8px; background:#153d32; color:white; font:600 10px/14px system-ui; text-align:center; box-shadow:0 2px 7px #0005; }
+.route-map-destination span { background:#202934; }
+.geographic-map-actions { position:absolute; top:10px; left:10px; z-index:500; }
+.geographic-map-actions button, .geographic-map-error button { border:1px solid #ffffffb3; border-radius:7px; background:#fffffff0; color:#26332e; padding:6px 9px; font:600 11px system-ui; cursor:pointer; }
+.geographic-map-actions button[aria-pressed="true"] { background:#153d32; color:white; }
+
+.geographic-map-caption { top: auto; bottom: 19px; left: 10px; }
+
+.geographic-map-actions { display: flex; gap: 5px; }
+
+.drive-reading-row { width: 270px; grid-template-columns: 1fr 1.2fr 1fr; gap: 8px; }
+.drive-reading-row strong { font-size: 14px; white-space: nowrap; }
+@media (min-width: 761px) and (max-height: 620px) {
+  .drive-route, .sidebar-bottom { bottom: 110px; }
+}
+@media (min-width: 761px) and (max-height: 540px) {
+  .drive-reading-row { display: none; }
+  .drive-safety { top: 245px; }
+  .drive-route, .sidebar-bottom { bottom: 90px; }
+}
+
+/* Quiet navigation surface with distinct route endpoints. Tile geography stays real. */
+.geographic-map { border-color: transparent; border-radius: 16px; box-shadow: 0 8px 28px #20334712; background: #edf1ed; }
+.route-map-pin { display: flex; flex-direction: column; align-items: center; background: transparent; }
+.route-map-pin i { display: block; width: 16px; height: 16px; border: 3px solid white; border-radius: 50%; background: #2456a6; box-shadow: 0 1px 5px #16233e65; }
+.route-map-pin span { margin-top: 4px; padding: 3px 6px; border: 0; border-radius: 5px; background: #ffffffed; color: #25334b; font: 600 10px/14px system-ui; box-shadow: 0 1px 5px #16233e25; white-space: nowrap; }
+.route-map-destination i { width: 18px; height: 23px; border: 0; border-radius: 0; background: #c74256; clip-path: polygon(0 0, 100% 0, 100% 50%, 18% 50%, 18% 100%, 0 100%); }
+.geographic-map-actions button { background: #ffffffdc; border-color: transparent; box-shadow: 0 1px 6px #16233e15; font-weight: 500; }
+.geographic-map-actions button[aria-pressed="true"] { background: #2456a6; }
+.geographic-map .leaflet-bar { border: 0; box-shadow: 0 1px 6px #16233e18; }
+.geographic-map .leaflet-bar a { background: #ffffffdc; color: #25334b; }
+.geographic-map-caption { background: #ffffffcf; font-size: 8px; }
+
+.geographic-map .leaflet-tile-pane { filter: saturate(.3) brightness(1.04); }
+
+@media (max-width: 760px) {
+  .stage-route { width: 160px; }
+  .geographic-map { aspect-ratio: 1; }
+  .geographic-map-actions button { padding: 5px 6px; font-size: 10px; }
+  .stage-label { max-width: calc(100% - 185px); }
+}
+
+.geographic-map .leaflet-bottom.leaflet-right .leaflet-control-zoom { margin-bottom: 26px; }
+
+/* Reference navigation: geography recedes; guidance remains crisp. */
+.geographic-map { background: transparent; border: 0; border-radius: 0; box-shadow: none; backdrop-filter: none; aspect-ratio: 1; overflow: visible; }
+.geographic-map .leaflet-container { background: transparent; }
+.geographic-map .leaflet-tile-pane { filter: grayscale(1) contrast(.35) brightness(1.4); opacity: .24; }
+.geographic-map-canvas { mask-image: linear-gradient(to right, transparent, #000 16%, #000 94%, transparent), linear-gradient(to bottom, #000 85%, transparent); mask-composite: intersect; }
+.route-map-pin { display: block; }
+.route-map-start i { width: 8px; height: 8px; border: 2px solid #263d72; background: #e8ede7; box-shadow: none; border-radius: 50%; }
+.route-map-destination i { width: 13px; height: 24px; background: #bd4052; box-shadow: none; clip-path: polygon(0 0, 100% 0, 100% 45%, 14% 45%, 14% 100%, 0 100%); }
+.geographic-map-caption { bottom: 13px; left: auto; right: 0; padding: 0; background: transparent; color: #70796f; font-size: 8px; }
+.geographic-map .leaflet-control-attribution { background: transparent; color: #70796f; font-size: 8px; }
+.geographic-map .leaflet-control-attribution a { color: #687568; }
+.geographic-map-menu { position: absolute; right: 0; top: 0; z-index: 600; }
+.geographic-map-menu summary { list-style: none; cursor: pointer; padding: 2px 8px; color: #657066; font-size: 16px; letter-spacing: 2px; }
+.geographic-map-menu summary::-webkit-details-marker { display: none; }
+.geographic-map-menu .geographic-map-actions { position: static; padding: 5px; background: #f4f6f1ed; border-radius: 8px; flex-wrap: wrap; max-width: 160px; }
+.geographic-map-menu summary:focus-visible { outline: 2px solid #263d72; border-radius: 4px; }
+
+.geographic-map-canvas { mask-image: none; }
+.geographic-map .leaflet-tile-pane { mask-image: linear-gradient(to right, transparent, #000 16%, #000 94%, transparent); }
+
+/* Keep the real street network legible while paper/land colors blend away. */
+.geographic-map .leaflet-tile-pane { filter: grayscale(1) contrast(.8) brightness(1.15); opacity: .62; mix-blend-mode: multiply; }
+.geographic-map .leaflet-map-pane { isolation: auto; }
+
+.geographic-map .leaflet-tile-pane { mask-image: none; }
+.geographic-map .leaflet-tile { mix-blend-mode: multiply; }
+
+/* Blend the finite tile viewport without masking Leaflet's zero-size pane. */
+.geographic-map { overflow: hidden; }
+.geographic-map::after { content: ''; position: absolute; inset: 0; z-index: 450; pointer-events: none; box-shadow: inset 0 0 20px 14px #e9ede8; }
+.geographic-map .leaflet-tile-pane { filter: grayscale(1) contrast(.65) brightness(1.22); opacity: .7; }
+/* Compact driving controls: technical readings remain in Vehicle details. */
+.drive-cruise { min-width:92px; width:104px; margin-left:12px; padding:4px 0 4px 16px; border:0; border-left:1px solid #40564930; border-radius:0; background:transparent; backdrop-filter:none; gap:2px; }
+.drive-cruise label { text-transform:uppercase; letter-spacing:.12em; font-size:10px; color:#5c6b61; }
+.drive-cruise input[type="number"] { width:3.5ch; flex:none; padding:0; appearance:textfield; font-size:30px; font-weight:500; line-height:1; }
+.drive-cruise input[type="number"]::-webkit-inner-spin-button,
+.drive-cruise input[type="number"]::-webkit-outer-spin-button { appearance:none; margin:0; }
+.drive-cruise input[type="range"] { height:16px; opacity:.75; }
+.drive-cruise input:focus-visible { outline:2px solid #397669; outline-offset:3px; border-radius:4px; }
+.drive-cruise input:disabled { opacity:.45; cursor:not-allowed; }
+.drive-reading-row { display:block; width:auto; }
+.drive-reading-row > div { display:flex; align-items:center; gap:10px; }
+.drive-reading-row strong { font-size:14px; }
+.drive-state h1 { line-height:1.25; font-size:21px; }
+.drive-state p { line-height:1.45; margin-top:6px; }
+.command-status:empty { display:none; }
+.turn-camera-preview { position:absolute; z-index:13; top:62px; width:240px; margin:0; overflow:hidden; border:1px solid #ffffff80; border-radius:16px; background:#eef1ecee; box-shadow:0 6px 28px #253a2920; }
+.turn-camera-left { right:50%; margin-right:12px; }
+.turn-camera-right { left:50%; margin-left:12px; }
+.turn-camera-preview figcaption { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 10px; font-size:12px; font-weight:600; }
+.turn-camera-preview small { font-size:9px; color:#59655d; font-weight:400; }
+.turn-camera-preview img { display:block; width:100%; aspect-ratio:16/9; object-fit:cover; }
+.turn-camera-unavailable { display:grid; place-items:center; aspect-ratio:16/9; color:#59655d; font-size:12px; }
+@media (min-width:761px) {
+  .drive-state { top:146px; width:260px; }
+  .drive-reading-row { top:254px; left:34px; }
+  .drive-safety { top:290px; font-size:11px; }
+}
+@media (min-width:761px) and (max-height:690px) {
+  .drive-state { top:126px; }
+  .drive-reading-row { top:226px; }
+  .drive-safety { top:260px; }
+}
+@media (max-width:760px) {
+  .drive-cruise { min-width:80px; width:92px; padding-left:10px; margin-left:4px; }
+  .drive-reading-row { display:none; }
+  .turn-camera-preview { top:50px; width:180px; }
+  .turn-camera-left { right:auto; left:12px; margin:0; }
+  .turn-camera-right { left:auto; right:12px; margin:0; }
+}
+/* Stack-free speed cluster: align the compact cruise to the speed's center,
+   and reserve a separate vertical region for status. Unknown map limits remain
+   available in Vehicle details rather than becoming a prominent main reading. */
+.drive-speed { align-items:center; }
+.drive-cruise { flex-shrink:0; }
+.drive-cruise input[type="number"] { font-size:26px; }
+.drive-cruise input[type="range"] { height:12px; }
+.drive-state p:empty { display:none; }
+.drive-stage:has(.turn-camera-preview) .drive-alert { top:250px; }
+@media (min-width:761px) and (max-width:1100px) {
+  .turn-camera-preview { width:180px; }
+  .turn-camera-preview small { max-width:122px; text-align:right; line-height:1.3; }
+}
+
+/* Keep critical readings legible when a dark facade fills the driving view. */
+@media (min-width:761px) {
+  .drive-stage::after {
+    content:"";
+    position:absolute;
+    top:0;
+    left:0;
+    width:360px;
+    height:340px;
+    z-index:4;
+    pointer-events:none;
+    background:linear-gradient(90deg,rgba(233,237,232,.96),rgba(233,237,232,.82) 72%,transparent);
+    mask-image:linear-gradient(#000 78%,transparent);
+  }
+}
+.drive-limit { display:flex; flex-direction:column; align-items:center; gap:3px; color:#59675e; }
+.drive-limit strong { display:grid; place-items:center; width:34px; height:34px; border:1px solid #70847865; border-radius:50%; font-size:14px; font-weight:600; }
+.drive-limit small { font-size:9px; }
+@media (min-width:761px) {
+  .drive-speed { top:26px; height:100px; }
+  .drive-state { top:164px; min-height:70px; }
+  .drive-safety { top:266px; }
+}
+@media (min-width:761px) and (max-height:690px) {
+  .drive-speed { height:80px; }
+  .drive-state { top:136px; }
+  .drive-safety { top:236px; }
+}
+@media (max-width:760px) {
+  .drive-limit { display:none; }
 }

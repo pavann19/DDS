@@ -7,6 +7,7 @@ import logging
 from app.core.config import settings
 from app.services.explainability import ExplainabilityEngine
 from app.services.anomaly_detector import AnomalyDetector
+from app.services.model_runtime import bound_inference_threads
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class InferencePipeline:
             # SECURITY NOTE: joblib.load on .pkl files is inherently unsafe against arbitrary code execution.
             # Assuming these artifacts are generated locally by the data pipeline and not externally supplied.
             self.model = joblib.load(os.path.join(settings.BASE_DIR, "best_model.pkl"))
+            bound_inference_threads(self.model)
             self.scaler = joblib.load(os.path.join(settings.BASE_DIR, "scaler.pkl"))
             self.label_encoder = joblib.load(os.path.join(settings.BASE_DIR, "label_encoder.pkl"))
             
@@ -85,7 +87,11 @@ class InferencePipeline:
 
         conf_dict = {str(self.label_encoder.inverse_transform([i])[0]): float(prob) for i, prob in enumerate(pred_proba)}
 
-        shap_result = self.explainer.explain_prediction(input_df, class_index=pred_idx)
+        shap_input = pd.DataFrame(scaled_input, columns=self.features)
+        shap_result = self.explainer.explain_prediction(shap_input, class_index=pred_idx)
+        # Attribution uses model-space values; the HMI displays sensor units.
+        for item in shap_result.get("contributions", []):
+            item["value"] = clean_input[item["feature"]]
 
         # The anomaly detector is an independently-trained model with its own
         # feature set (anomaly_model.pkl's feature_names_in_), which is not

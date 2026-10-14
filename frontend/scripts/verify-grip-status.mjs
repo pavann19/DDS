@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { deriveAutonomy } from '../src/lib/consoleState.ts';
+const ctx={ego:{velocity:10,speed_limit_reason:'cruise',grip_budget:{recovery_active:true,within_modeled_budget:false}},shield:null,prediction:null,planner:null};
+assert.equal(deriveAutonomy(ctx).label,'Grip recovery');
+assert.equal(deriveAutonomy({...ctx,ego:{...ctx.ego,has_arrived:true}}).label,'Grip recovery');
+assert.equal(deriveAutonomy({...ctx,shield:{approved:false,override_action:'EMERGENCY_BRAKE'}}).label,'Safety override');
+assert.equal(deriveAutonomy({...ctx,ego:{...ctx.ego,sensor_health:{monitored:true,ready:false}}}).label,'Sensors unavailable');
+assert.equal(deriveAutonomy({...ctx,ego:{...ctx.ego,sensor_health:{monitored:true,ready:false,reason:17}}}).label,'Sensors unavailable');
+assert.equal(deriveAutonomy({...ctx,ego:{...ctx.ego,grip_budget:null}}).label,'Cruising');
+assert.equal(deriveAutonomy({...ctx,ego:{...ctx.ego,grip_budget:{within_modeled_budget:true,recovery_active:false}}}).label,'Cruising');
+console.log('Grip recovery truthfulness and emergency/sensor precedence verified');
