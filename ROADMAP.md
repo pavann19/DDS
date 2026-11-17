@@ -2,7 +2,7 @@
 
 Source: an external ("Gemini") DDS V2 architecture proposal, reviewed
 2026-08-11 and reordered by leverage-per-hour against this project's actual
-purpose — a solo-built portfolio piece for German MSc applications, no hard
+purpose — a solo-built project, no hard
 deadline, "Chrome v1 → v150" pacing, not a thesis defended against an
 examiner. Kept because the layered architecture (perception → decision →
 safety → planning → control → render) is the real canonical AV decomposition,
@@ -28,7 +28,7 @@ internal telemetry with rich external traffic context (nuScenes' CAN
 expansion comes closest but is from a Renault Zoe, an EV, with no
 RPM/coolant/fuel signals). The ablation is dropped as a goal. NGSIM survives
 as a **traffic-realism** source instead — real recorded human highway
-driving, public domain, no request required — which is a stronger portfolio
+driving, public domain, no request required — which is a stronger demonstration
 line than a synthetic-scenario library regardless.
 
 ---
@@ -170,7 +170,7 @@ Phase 1's planner output
 - [ ] HMI: a visible shield panel showing approved vs. overridden, with
       the reason (e.g. "TTC 1.2s, unsafe → overridden to brake"). This is
       the single most demoable addition available — a screen recording of
-      a real override is a stronger portfolio artifact than any
+      a real override is a stronger demonstration artifact than any
       accuracy table.
 
 ## Phase 5 — Scenario Engine (0/4 done)
@@ -286,7 +286,7 @@ variable most likely to change when to pull one forward:
   signals do not add information the classifier is missing.
 - **Full developer-facing digital-twin UI** (request inspector, trace
   viewer, benchmark dashboard). Valuable eventually; the general-user demo
-  surface (Phases 4–6) matters more for a portfolio audience first.
+  surface (Phases 4–6) matters more for a reviewer audience first.
 - **Multi-objective GA-style fitness weighting** for driving quality
   (comfort/efficiency/safety/stability combined). Revisit only if Phase 7
   produces enough real controller variants to make weighting them a real

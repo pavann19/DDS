@@ -2,7 +2,7 @@
 
 The preserved working version is local checkpoint **ea6b4bbc18d17d100050cc407959caa9a5e092d9** on `phase-7.5-ui-design`. Its parent is `a4c9072c4c9328c3d60790fb0ffa66adf479532b`; the checkpoint captures the earlier uncommitted software, recorded maps and engineering reports. Local tag: `dds-local-checkpoint-20261012`. A verified local Git bundle and tracked-file SHA-256 manifest are retained in `output/dds-working-checkpoint-20261012.bundle` and `output/advanced-checkpoint-manifest.json`.
 
-New executable changes are developed first in the isolated worktree `D:\college\Major Project\DDS_Turning_Sandbox` on `feat/turning-feasibility-20261012`. The main runtime remains at the checkpoint until sandbox tests and independent review pass. No GitHub push, PR or deployment is authorized. ML continues to analyze simulated internal readings; driving decisions belong to the planning, control and safety systems.
+New executable changes are developed first in an isolated worktree on `feat/turning-feasibility-20261012`. The main runtime remains at the checkpoint until sandbox tests and independent review pass. No GitHub push, PR or deployment is authorized. ML continues to analyze simulated internal readings; driving decisions belong to the planning, control and safety systems.
 
 ## Baseline reproduced during this session
 
