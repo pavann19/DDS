@@ -1,6 +1,6 @@
 # DDS Rebuild Roadmap
 
-Source: an external ("Gemini") DDS V2 architecture proposal, reviewed
+Source: an external DDS V2 architecture proposal, reviewed
 2026-08-11 and reordered by leverage-per-hour against this project's actual
 purpose — a solo-built project, no hard
 deadline, "Chrome v1 → v150" pacing, not a thesis defended against an

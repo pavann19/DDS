@@ -385,7 +385,7 @@ match fails; spring camera; 60-FPS frame-time gate (Phase 12 harness).
 
 ### Phase 7.5++ — cockpit visual skin (2026-08-28, same branch, commits `16fb345` → `b53b9b9`)
 A pure restyle of the 7.5+ console to the "operator cockpit" language of
-a Gemini-built reference prototype the owner preferred (`experimental-ui/`,
+an external reference prototype the owner preferred (`experimental-ui/`,
 untracked). Data wiring, honesty derivations (`roles.ts`,
 `consoleState.ts`, `useEvents`) and the channel contract are unchanged.
 
