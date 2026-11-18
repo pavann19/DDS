@@ -234,7 +234,7 @@ channel layering still isn't used.
 **Pros:** fixes all four problems; the protocol v3 split finally earns its
 keep; the "add a panel" cost for future phases drops to near zero.
 **Cons:** touches most frontend files; the cinematic Drive-mode feel has to
-be preserved deliberately (it is the portfolio hook) rather than inherited.
+be preserved deliberately (it is the distinguishing feature) rather than inherited.
 
 ---
 
@@ -250,7 +250,7 @@ justified ADR-001. C is also a strict superset of B's visual work: the
 token unification and grid discipline are done either way.
 
 **Preserving the cinematic feel.** The Drive-mode glass HUD *looks* good
-and is the reason a portfolio reviewer stays on the page. C keeps it — but
+and is the reason a reviewer stays on the page. C keeps it — but
 as a deliberately-built `hud/` component on the shared token set, with the
 `focus` density making the rail and bottom strip disappear so the screen
 is *exactly* today's Drive view. Nothing visual is lost; the duplicate
@@ -272,7 +272,7 @@ disclaimer.
 - Phase 8 (spatiotemporal planner) adds one `Planner` panel section; Phase
   9 (tire physics) adds one `Vehicle Dynamics` panel; Phase 11 (RSS/MRM)
   extends the `Safety` panel. Each has a known home and a known channel.
-- The `density` control gives the thesis/portfolio "evidence view"
+- The `density` control gives the thesis "evidence view"
   (`inspect`) and the demo "cinematic view" (`focus`) from one codebase.
 - A new contributor (or a future AI session) can find "the safety UI" in
   exactly one file.

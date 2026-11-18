@@ -241,7 +241,7 @@ flagged this repeatedly: P6-1's 3.18/5.80m, P6-1d's 3.30m, and P6-2's
 numbers. `app/services/frenet.py::project_to_frenet` is the tool to finally
 do this once, consistently, on a fixed real route set, before any
 before/after claim about this phase's work goes anywhere public-facing
-(a portfolio README, an application, etc).
+(a README, an application, etc).
 
 - [ ] One consistent perpendicular-projection cross-track metric, measured
       for legacy vs. the current bicycle+Frenet+IDM+shield stack, on the

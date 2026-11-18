@@ -255,7 +255,7 @@ reported cloud commit 7b124e6 was not present locally and was not blindly applie
 
 ## Reproduction commands
 
-Run from `D:\college\Major Project\DDS_Rebuilt` in PowerShell:
+Run from the repository root in PowerShell:
 
 ```powershell
 .\venv\Scripts\python.exe -m pytest -q
