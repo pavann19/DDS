@@ -43,7 +43,6 @@ dds_telemetry.db-wal
 
 # Development notes (local-only)
 .dev_notes/
-Gemini_plans/
 STATE.md
 AUDIT_PROTOCOL.md
 VERIFICATION_PROTOCOL.md
